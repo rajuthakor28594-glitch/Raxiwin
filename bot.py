@@ -13,9 +13,12 @@ BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 WIN_STICKER = "CAACAgUAAxkBAAEk11BrAxiWg-reLn36ILw5RH1v7kNr2wACohcAArwMgVfzyjUbYvTAxD0E"
 
-# Aapka Raxi Win Authorization Token
 AUTH_TOKEN = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiIxNzk1Mzc0MjY4IiwibmJmIjoiMTc5NTM3NDI2OCIsImV4cCI6IjE3OTUzNzYwNjgiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL2V4cGlyYXRpb24iOiIxMS8yMy8yMDI2IDE6MDQ6MjggQU0iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBY2Nlc3NfVG9rZW4iLCJVc2VySWQiOiIxMDU4NDQiLCJVc2VyTmFtZSI6IjkxNzM1OTg3MjM3NCIsIlVzZXJQaG90byI6IjEiLCJOaWNrTmFtZSI6Ik1lbWJlck5OR1ZDOU1GIiwiQW1vdW50IjoiMC4wMCIsIkludGVncmFsIjoiMCIsIkxvZ2luTWFyayI6Ikg1IiwiTG9naW5UaW1lIjoiMTEvMjMvMjAyNiAxMjozNDoyOCBBTSIsIkxvZ2luSVBBZGRyZXNzIjoiMjQwOTo0MGMxOjg6N2NiMDo4MDAwOjoiLCJEYk51bWJlciI6IjAiLCJJc3ZhbGlkYXRvciI6IjAiLCJLZXlDb2RlIjoiMTE4IiwiVG9rZW5UeXBlIjoiQWNjZXNzX1Rva2VuIiwiUGhvbmVUeXBlIjoiMSIsIlVzZXJUeXBlIjoiMCIsIlVzZXJOYW1lMiI6IiIsImlzcyI6Imp3dElzc3VlciIsImF1ZCI6ImxvdHRlcnlUaWNrZXQifQ.ve8GqpfR0d5RNLYCJh1UE41KaUDP0VPFMO4dCdXj11I"
-API_URL = "https://www.raxi4.com/api/webapi/GetNoaverageEmerdList"
+
+API_URLS = [
+    "https://www.raxi4.com/api/webapi/GetNoaverageEmerdList",
+    "https://api.raxi4.com/api/webapi/GetNoaverageEmerdList"
+]
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -58,17 +61,23 @@ def fetch_recent_records(count=10):
         "pageSize": count,
         "pageNo": 1,
         "typeId": 1,
-        "language": 0
+        "language": 0,
+        "random": "4a0522c6ecd8410496260e686be2a57c",
+        "signature": "334B5E70A0C9B8918B0B15E517E2069C",
+        "timestamp": int(datetime.now(UTC).timestamp())
     }
-    try:
-        res = requests.post(API_URL, json=payload, headers=headers, timeout=8)
-        if not res.text.strip():
-            return []
-        data = res.json()
-        return data.get("data", {}).get("list", [])
-    except Exception as e:
-        print("API error:", e, flush=True)
-        return []
+    for url in API_URLS:
+        try:
+            res = requests.post(url, json=payload, headers=headers, timeout=8)
+            print(f"API [{url}] Status: {res.status_code} | Resp: {res.text[:150]}", flush=True)
+            if res.text.strip():
+                data = res.json()
+                records = data.get("data", {}).get("list", [])
+                if records:
+                    return records
+        except Exception as e:
+            print(f"API error [{url}]: {e}", flush=True)
+    return []
 
 def get_smart_prediction():
     global level_index, last_pred
@@ -79,16 +88,12 @@ def get_smart_prediction():
     outcomes = ["BIG" if int(item.get("number")) >= 5 else "SMALL" for item in records]
     latest = outcomes[0]
 
-    # 1. Agar lagatar 3 ya zyada ek hi result aa raha hai (Dragon Trend), to trend follow karein
     if len(outcomes) >= 3 and outcomes[0] == outcomes[1] == outcomes[2]:
         choice = latest
-    # 2. Agar pichhle 2 level (1x, 2x) loss hue hain, to strategy palat kar opposite chunein
     elif level_index >= 2 and last_pred:
         choice = "SMALL" if last_pred == "BIG" else "BIG"
-    # 3. Zig-Zag pattern (ABAB) check karein
     elif len(outcomes) >= 4 and outcomes[0] != outcomes[1] and outcomes[1] != outcomes[2] and outcomes[2] != outcomes[3]:
         choice = "SMALL" if latest == "BIG" else "BIG"
-    # 4. Pichhle 10 rounds mein jo kam aaya hai uska balance karein
     else:
         big_count = outcomes.count("BIG")
         small_count = outcomes.count("SMALL")
@@ -110,7 +115,7 @@ async def check_result_and_send_sticker(period_id, pred_choice):
     await asyncio.sleep(62)
 
     actual_result = None
-    for _ in range(4):
+    for _ in range(3):
         actual_result = fetch_actual_result(period_id)
         if actual_result:
             break
@@ -129,7 +134,7 @@ async def check_result_and_send_sticker(period_id, pred_choice):
         level_index = (level_index + 1) % len(LEVELS)
         print(f"LOSS for {period_id} (Actual: {actual_result}). Next level: {LEVELS[level_index]}x", flush=True)
     else:
-        print(f"Result fetch nahi ho paya for {period_id} (Check Token)", flush=True)
+        print(f"Result fetch nahi ho paya for {period_id}", flush=True)
 
 async def start_bot():
     last_period = ""

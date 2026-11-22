@@ -8,7 +8,7 @@ import pytz
 from telegram import Bot
 
 # --- Bot Details ---
-BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWnq3_p_iv8srpV"
+BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 WIN_STICKER = "CAACAgUAAxkBAAEk11BrAxiWg-reLn36ILw5RH1v7kNr2wACohcAArwMgVfzyjUbYvTAxD0E"
 

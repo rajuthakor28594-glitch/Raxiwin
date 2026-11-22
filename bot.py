@@ -28,14 +28,16 @@ def run_web_server():
 
 bot = Bot(token=BOT_TOKEN)
 IST = pytz.timezone('Asia/Kolkata')
+UTC = pytz.UTC
 
 def get_current_wingo_30s_period():
-    now = datetime.now(IST)
-    date_str = now.strftime("%Y%m%d")
-    total_seconds = now.hour * 3600 + now.minute * 60 + now.second
+    now_ist = datetime.now(IST)
+    now_utc = datetime.now(UTC)
+    date_str = now_ist.strftime("%Y%m%d")
+    total_seconds = now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second
     round_number = (total_seconds // 30) + 1
     period_id = f"{date_str}10005{round_number:04d}"
-    return period_id, now.second
+    return period_id, now_utc.second
 
 async def start_bot():
     last_period = ""

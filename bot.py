@@ -13,8 +13,8 @@ BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 WIN_STICKER = "CAACAgUAAxkBAAEk11BrAxiWg-reLn36ILw5RH1v7kNr2wACohcAArwMgVfzyjUbYvTAxD0E"
 
-# Raxi Win API URL (WinGo 1 Min ke liye typeId: 1)
-API_URL = "https://raxi4.com/api/webapi/GetNoaverageEmerdList"
+# Raxi Win API URL (www ke saath WinGo 1 Min ke liye)
+API_URL = "https://www.raxi4.com/api/webapi/GetNoaverageEmerdList"
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -50,9 +50,9 @@ def fetch_actual_result(target_period):
     """Raxi Win server se 1Min ka asli result (BIG ya SMALL) check karta hai"""
     headers = {
         "Content-Type": "application/json;charset=UTF-8",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://raxi4.com",
-        "Referer": "https://raxi4.com/"
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Origin": "https://www.raxi4.com",
+        "Referer": "https://www.raxi4.com/"
     }
     payload = {
         "pageSize": 5,
@@ -62,6 +62,9 @@ def fetch_actual_result(target_period):
     }
     try:
         res = requests.post(API_URL, json=payload, headers=headers, timeout=8)
+        if not res.text.strip():
+            print(f"Empty response from server (Status: {res.status_code})", flush=True)
+            return None
         data = res.json()
         records = data.get("data", {}).get("list", [])
         for item in records:

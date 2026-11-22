@@ -11,12 +11,9 @@ from telegram import Bot
 BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 WIN_STICKER = "CAACAgUAAxkBAAEk11BrAxiWg-reLn36ILw5RH1v7kNr2wACohcAArwMgVfzyjUbYvTAxD0E"
-AUTH_TOKEN = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiIxNzk1Mzc2MDA0IiwibmJmIjoiMTc5NTM3NjAwNCIsImV4cCI6IjE3OTUzNzc4MDQiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL2V4cGlyYXRpb24iOiIxMS8yMy8yMDI2IDE6MzM6MjQgQU0iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBY2Nlc3NfVG9rZW4iLCJVc2VySWQiOiI0Nzg1OTM0IiwiVXNlck5hbWUiOiI5MTg2MTk5NDQzMzUiLCJVc2VyUGhvdG8iOiIxIiwiTmlja05hbWUiOiJNZW1iZXJOTkdERFY1SiIsIkFtb3VudCI6IjQuNDkiLCJJbnRlZ3JhbCI6IjAiLCJMb2dpbk1hcmsiOiJINSIsIkxvZ2luVGltZSI6IjExLzIzLzIwMjYgMTowMzoyNCBBTSIsIkxvZ2luSVBBZGRyZXNzIjoiMjQwOTo0MGMxOjg6N2NiMDo4MDAwOjoiLCJEYk51bWJlciI6IjAiLCJJc3ZhbGlkYXRvciI6IjAiLCJLZXlDb2RlIjoiNDU2IiwiVG9rZW5UeXBlIjoiQWNjZXNzX1Rva2VuIiwiUGhvbmVUeXBlIjoiMSIsIlVzZXJUeXBlIjoiMCIsIlVzZXJOYW1lMiI6IiIsImlzcyI6Imp3dElzc3VlciIsImF1ZCI6ImxvdHRlcnlUaWNrZXQifQ.OZ3Cty04ADJy0YWmMJKihHk5hZhmTyT6s6u3awVRBdY"
+AUTH_TOKEN = "EyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOiIxNzk1Mzc3MTQzIiwibmJmIjoiMTc5NTM3NzE0MyIsImV4cCI6IjE3OTUzNzg5NDMiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL2V4cGlyYXRpb24iOiIxMS8yMy8yMDI2IDE6NTI6MjMgQU0iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBY2Nlc3NfVG9rZW4iLCJVc2VySWQiOiIxMDU4NDQiLCJVc2VyTmFtZSI6IjkxNzM1OTg3MjM3NCIsIlVzZXJQaG90byI6IjEiLCJOaWNrTmFtZSI6Ik1lbWJlck5OR1ZDOU1GIiwiQW1vdW50IjoiMjMwLjM4IiwiSW50ZWdyYWwiOiIwIiwiTG9naW5NYXJrIjoiSDUiLCJMb2dpblRpbWUiOiIxMS8yMy8yMDI2IDE6MjI6MjMgQU0iLCJMb2dpbklQQWRkcmVzcyI6IjI0MDk6NDBjMTo4OjdjYjA6ODAwMDo6IiwiRGJOdW1iZXIiOiIwIiwiSXN2YWxpZGF0b3IiOiIwIiwiS2V5Q29kZSI6IjExOSIsIlRva2VuVHlwZSI6IkFjY2Vzc19Ub2tlbiIsIlBob25lVHlwZSI6IjEiLCJVc2VyVHlwZSI6IjAiLCJVc2VyTmFtZTIiOiIiLCJpc3MiOiJqd3RJc3N1ZXIiLCJhdWQiOiJsb3R0ZXJ5VGlja2V0In0.rhqI9EIuHNeBsUy4Os4OYgjKCBBrPq1YTuh0Z41T4yw"
 
-API_URLS = [
-    "https://www.raxi4.com/api/webapi/GetNoaverageEmerdList",
-    "https://api.raxi4.com/api/webapi/GetNoaverageEmerdList"
-]
+API_URL = "https://www.raxi4.com/api/webapi/GetNoaverageEmerdList"
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -48,7 +45,7 @@ def fetch_recent_records(count=10):
     headers = {
         "Content-Type": "application/json;charset=UTF-8",
         "Authorization": f"Bearer {AUTH_TOKEN}",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         "Origin": "https://www.raxi4.com",
         "Referer": "https://www.raxi4.com/"
     }
@@ -61,16 +58,13 @@ def fetch_recent_records(count=10):
         "signature": "334B5E70A0C9B8918B0B15E517E2069C",
         "timestamp": int(datetime.now(UTC).timestamp())
     }
-    for url in API_URLS:
-        try:
-            res = requests.post(url, json=payload, headers=headers, timeout=8)
-            print(f"API [{url}] Status: {res.status_code} | Resp: {res.text[:120]}", flush=True)
-            if res.text.strip():
-                records = res.json().get("data", {}).get("list", [])
-                if records:
-                    return records
-        except Exception as e:
-            print(f"API error [{url}]: {e}", flush=True)
+    try:
+        res = requests.post(API_URL, json=payload, headers=headers, timeout=8)
+        print(f"RAXI API Status: {res.status_code} | Resp: {res.text[:150]}", flush=True)
+        if res.text.strip():
+            return res.json().get("data", {}).get("list", [])
+    except Exception as e:
+        print(f"RAXI API error: {e}", flush=True)
     return []
 
 def get_smart_prediction():
@@ -123,7 +117,7 @@ async def check_result_and_send_sticker(period_id, pred_choice):
 
 async def start_bot():
     last_period = ""
-    print("Bot Started!", flush=True)
+    print("Raxi Bot Started!", flush=True)
     while True:
         period_id, current_sec = get_current_wingo_1min_period()
         if period_id != last_period and current_sec < 4:

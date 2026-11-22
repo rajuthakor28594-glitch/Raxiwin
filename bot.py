@@ -1,14 +1,30 @@
+import os
 import asyncio
 import random
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import pytz
 from telegram import Bot
 
-# --- यहाँ सिर्फ अपना Bot Token डालें ---
-BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWXO_Eonq3 p_iv8srpVlk"
-
+# --- Bot Details ---
+BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWnq3_p_iv8srpV"
 CHANNEL_ID = "-1002395334740"
 WIN_STICKER = "CAACAgUAAxkBAAEk11BrAxiWg-reLn36ILw5RH1v7kNr2wACohcAArwMgVfzyjUbYvTAxD0E"
+
+# Render Web Service ko Live rakhne ke liye server
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Raxi Win Bot is Live!")
+    def log_message(self, format, *args):
+        pass
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
 
 bot = Bot(token=BOT_TOKEN)
 IST = pytz.timezone('Asia/Kolkata')
@@ -24,7 +40,7 @@ def get_current_wingo_30s_period():
 async def start_bot():
     last_period = ""
     win_streak = 0
-    print("Raxi Win 30S Bot चालू हो गया है...")
+    print("Raxi Win 30S Bot chalu ho gaya hai...", flush=True)
 
     while True:
         period_id, current_sec = get_current_wingo_30s_period()
@@ -43,18 +59,21 @@ async def start_bot():
             )
             try:
                 await bot.send_message(chat_id=CHANNEL_ID, text=pred_msg, parse_mode="Markdown")
+                print(f"Sent prediction for {period_id}", flush=True)
             except Exception as e:
-                print("मैसेज भेजने में दिक्कत:", e)
+                print("Message bhejne mein dikkat:", e, flush=True)
 
             await asyncio.sleep(27)
 
             try:
                 await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER)
                 win_streak += 1
+                print(f"Sent sticker for {period_id}", flush=True)
             except Exception as e:
-                print("स्टिकर भेजने में दिक्कत:", e)
+                print("Sticker bhejne mein dikkat:", e, flush=True)
 
         await asyncio.sleep(1)
 
 if __name__ == "__main__":
+    threading.Thread(target=run_web_server, daemon=True).start()
     asyncio.run(start_bot())

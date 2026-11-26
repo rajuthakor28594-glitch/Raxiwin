@@ -1,12 +1,13 @@
 import asyncio
 import datetime
+import json
 import os
 import random
 import threading
+import requests
 from flask import Flask
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Bot
 from telegram.constants import ParseMode
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
@@ -19,6 +20,7 @@ LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9ChrB-IpRe3b0bdmmApGZoRKD55tRQACTwMAAk5qkV
 
 TARGET_WINS = 10
 REGISTER_LINK = "https://www.raxiwin.game/#/register?invitationCode=51966105844"
+TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # =================================================
 
 app = Flask(__name__)
@@ -30,6 +32,8 @@ def home():
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+bot = Bot(token=BOT_TOKEN)
 
 stats = {
     "total_rounds": 0,
@@ -73,34 +77,58 @@ def calculate_ratio():
         return 0.0
     return round((stats["wins"] / stats["total_rounds"]) * 100, 2)
 
-def get_admin_keyboard():
+def get_keyboard_json():
     next_mult = 3 ** stats["current_level"]
     if stats["active"]:
         keyboard = [
             [
-                InlineKeyboardButton(f"✅ WIN ({stats['wins'] + 1}/{TARGET_WINS})", callback_data="mark_win"),
-                InlineKeyboardButton(f"❌ LOSS ({next_mult}X)", callback_data="mark_loss")
+                {"text": f"✅ WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_win"},
+                {"text": f"❌ LOSS ({next_mult}X)", "callback_data": "mark_loss"}
             ],
             [
-                InlineKeyboardButton("🛑 STOP PREDICTION", callback_data="stop_session")
+                {"text": "🛑 STOP PREDICTION", "callback_data": "stop_session"}
             ]
         ]
     else:
         keyboard = [
             [
-                InlineKeyboardButton("▶️ START PREDICTION (0/10)", callback_data="start_session")
+                {"text": "▶️ START PREDICTION (0/10)", "callback_data": "start_session"}
             ]
         ]
-    return InlineKeyboardMarkup(keyboard)
+    return json.dumps({"inline_keyboard": keyboard})
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID:
-        await query.answer("Sirf Admin hi button daba sakta hai!", show_alert=True)
-        return
+def send_admin_panel(text):
+    try:
+        requests.post(
+            f"{TG_API}/sendMessage",
+            data={
+                "chat_id": ADMIN_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+                "reply_markup": get_keyboard_json()
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Admin Panel Error: {e}")
 
-    await query.answer()
-    action = query.data
+def edit_admin_panel(chat_id, message_id, text):
+    try:
+        requests.post(
+            f"{TG_API}/editMessageText",
+            data={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "Markdown",
+                "reply_markup": get_keyboard_json()
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Edit Panel Error: {e}")
+
+async def process_admin_action(action, chat_id, message_id):
     period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
 
     if action == "start_session":
@@ -110,7 +138,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats["total_rounds"] = 0
         stats["current_level"] = 1
 
-        await context.bot.send_message(
+        await bot.send_message(
             chat_id=CHANNEL_ID,
             text=(
                 f"🔥 **RAXI WIN - WINGO 1 MIN STARTED!** 🔥\n"
@@ -121,20 +149,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True
         )
 
-        await query.edit_message_text(
-            text=(
-                f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
-                f"Agli win par `1/{TARGET_WINS}` ho jayega:"
-            ),
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+        edit_admin_panel(
+            chat_id, message_id,
+            f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
+            f"Agli win par `1/{TARGET_WINS}` ho jayega:"
         )
 
     elif action == "stop_session":
         stats["active"] = False
         ratio = calculate_ratio()
 
-        await context.bot.send_message(
+        await bot.send_message(
             chat_id=CHANNEL_ID,
             text=(
                 f"🛑 **PREDICTION SESSION STOPPED!**\n"
@@ -145,22 +170,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        await query.edit_message_text(
-            text=(
-                f"🔴 **PREDICTION STOPPED ({stats['wins']}/{TARGET_WINS})**\n"
-                f"📊 Last Session Ratio: `{ratio}%`\n"
-                f"Naya session `0/10` se shuru karne ke liye **START** dabayein:"
-            ),
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+        edit_admin_panel(
+            chat_id, message_id,
+            f"🔴 **PREDICTION STOPPED ({stats['wins']}/{TARGET_WINS})**\n"
+            f"📊 Last Session Ratio: `{ratio}%`\n"
+            f"Naya session `0/10` se shuru karne ke liye **START** dabayein:"
         )
 
     elif action == "mark_win":
         if not stats["active"]:
-            await query.edit_message_text(
-                "🔴 Prediction abhi band hai. Pehle START dabayein:",
-                reply_markup=get_admin_keyboard()
-            )
+            edit_admin_panel(chat_id, message_id, "🔴 Prediction band hai. Pehle START dabayein:")
             return
 
         prev_wins = stats["wins"]
@@ -170,11 +189,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats["history"].append(stats["last_size"])
         ratio = calculate_ratio()
 
-        # 1. Sabse pehle Win Sticker bhejein
-        await context.bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
-        
-        # 2. Text mein 0/10 -> 1/10 -> 2/10... progression aur Ratio bhejein
-        await context.bot.send_message(
+        # 1. Win Sticker bhejein
+        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
+
+        # 2. 0/10 -> 1/10 -> 2/10... progression aur Ratio bhejein
+        await bot.send_message(
             chat_id=CHANNEL_ID,
             text=(
                 f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
@@ -187,7 +206,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 10/10 Wins poori hote hi Auto-Stop
         if stats["wins"] >= TARGET_WINS:
             stats["active"] = False
-            await context.bot.send_message(
+            await bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=(
                     f"🎉 **TARGET COMPLETE ({TARGET_WINS}/{TARGET_WINS} WINS)!** 🎉\n"
@@ -197,33 +216,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
                 parse_mode=ParseMode.MARKDOWN
             )
-            await query.edit_message_text(
-                text=(
-                    f"🏆 **10/10 WINS COMPLETE! AUTO-STOPPED**\n"
-                    f"📈 Final Ratio: `{ratio}%`\n"
-                    f"Naya session `0/10` se shuru karne ke liye START dabayein:"
-                ),
-                reply_markup=get_admin_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
+            edit_admin_panel(
+                chat_id, message_id,
+                f"🏆 **10/10 WINS COMPLETE! AUTO-STOPPED**\n"
+                f"📈 Final Ratio: `{ratio}%`\n"
+                f"Naya session `0/10` se shuru karne ke liye START dabayein:"
             )
             return
 
-        await query.edit_message_text(
-            text=(
-                f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-                f"✅ Progress: `{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`\n"
-                f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
-            ),
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+        edit_admin_panel(
+            chat_id, message_id,
+            f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
+            f"✅ Progress: `{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`\n"
+            f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
         )
 
     elif action == "mark_loss":
         if not stats["active"]:
-            await query.edit_message_text(
-                "🔴 Prediction abhi band hai. Pehle START dabayein:",
-                reply_markup=get_admin_keyboard()
-            )
+            edit_admin_panel(chat_id, message_id, "🔴 Prediction band hai. Pehle START dabayein:")
             return
 
         stats["total_rounds"] += 1
@@ -235,8 +245,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ratio = calculate_ratio()
 
         # 3X Loss Sticker aur Alert bhejein
-        await context.bot.send_sticker(chat_id=CHANNEL_ID, sticker=LOSS_3X_STICKER_ID)
-        await context.bot.send_message(
+        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=LOSS_3X_STICKER_ID)
+        await bot.send_message(
             chat_id=CHANNEL_ID,
             text=(
                 f"❌ **LOSS** | Period: `{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
@@ -246,42 +256,61 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        await query.edit_message_text(
-            text=(
-                f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-                f"❌ Last: **LOSS** (Agla Round: **{multiplier}x**)\n"
-                f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
-            ),
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
+        edit_admin_panel(
+            chat_id, message_id,
+            f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
+            f"❌ Last: **LOSS** (Agla Round: **{multiplier}x**)\n"
+            f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
         )
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id == ADMIN_ID:
-        status_text = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED (0/10)"
-        await update.message.reply_text(
-            f"🎛 **RAXI WIN CONTROL PANEL ({status_text})**\nNiche buttons se Prediction Start/Stop aur Win/Loss control karein:",
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-async def prediction_worker(app_bot):
+async def main_loop():
     last_predicted_period = None
+    offset = 0
 
+    # Purane pending updates clear karein
     try:
-        await app_bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                f"🎛 **RAXI WIN CONTROL PANEL READY!**\n"
-                f"Session `0/{TARGET_WINS}` se shuru karne ke liye niche **START PREDICTION** dabayein:"
-            ),
-            reply_markup=get_admin_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        print(f"Admin message error: {e}")
+        r = requests.get(f"{TG_API}/getUpdates", params={"offset": -1}, timeout=5).json()
+        if r.get("result"):
+            offset = r["result"][-1]["update_id"] + 1
+    except Exception:
+        pass
+
+    # Deploy hote hi aapko Control Panel bhejein
+    send_admin_panel(
+        f"🎛 **RAXI WIN CONTROL PANEL READY!**\n"
+        f"Session `0/{TARGET_WINS}` se shuru karne ke liye niche **START PREDICTION** dabayein:"
+    )
 
     while True:
+        # 1. Admin ke /start ya Button clicks check karein
+        try:
+            res = requests.get(f"{TG_API}/getUpdates", params={"offset": offset, "timeout": 1}, timeout=5).json()
+            for upd in res.get("result", []):
+                offset = upd["update_id"] + 1
+
+                # Agar aapne /start bheja ho
+                if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
+                    txt = upd["message"].get("text", "")
+                    if txt.startswith("/start"):
+                        status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED (0/10)"
+                        send_admin_panel(
+                            f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\n"
+                            f"Niche buttons se Prediction Start/Stop aur Win/Loss control karein:"
+                        )
+
+                # Agar aapne koi Button dabaya ho
+                elif "callback_query" in upd:
+                    cb = upd["callback_query"]
+                    if cb.get("from", {}).get("id") == ADMIN_ID:
+                        requests.post(f"{TG_API}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=5)
+                        action = cb.get("data")
+                        chat_id = cb["message"]["chat"]["id"]
+                        msg_id = cb["message"]["message_id"]
+                        await process_admin_action(action, chat_id, msg_id)
+        except Exception as e:
+            print(f"Update check error: {e}")
+
+        # 2. Agar session START hai toh har naye minute par Prediction bhejein
         if stats["active"]:
             now = get_ist_now()
             current_period = get_raxi_period_number(now)
@@ -309,7 +338,7 @@ async def prediction_worker(app_bot):
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"🔗 [Play on Raxi Win]({REGISTER_LINK})"
                 )
-                await app_bot.send_message(
+                await bot.send_message(
                     chat_id=CHANNEL_ID,
                     text=pred_msg,
                     parse_mode=ParseMode.MARKDOWN,
@@ -318,17 +347,8 @@ async def prediction_worker(app_bot):
         else:
             last_predicted_period = None
 
-        await asyncio.sleep(2)
-
-async def post_init(application: Application):
-    asyncio.create_task(prediction_worker(application.bot))
-
-def main():
-    threading.Thread(target=run_web, daemon=True).start()
-    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.run_polling(drop_pending_updates=True)
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=run_web, daemon=True).start()
+    asyncio.run(main_loop())

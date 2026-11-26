@@ -20,12 +20,11 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 app = Flask(__name__)
 
-# Yahan aapke khud ke bot se bheje gaye stickers save honge
 stickers = {
     "win": "",
     "jackpot": "",
     "loss": "",
-    "waiting_for": None  # 'win', 'jackpot', ya 'loss'
+    "waiting_for": None
 }
 
 stats = {
@@ -33,11 +32,14 @@ stats = {
     "wins": 0,
     "losses": 0,
     "current_level": 1,
+    "consecutive_losses": 0,
     "active": False,
     "current_period": "",
     "last_size": "BIG",
     "last_nums": [6, 8],
-    "history": ["BIG", "SMALL", "SMALL", "SMALL", "BIG"]
+    "history": ["BIG", "SMALL", "BIG", "BIG", "SMALL", "SMALL", "BIG", "SMALL"],
+    "num_history": [7, 2, 6, 8, 1, 4, 9, 3],
+    "strategy_used": "TREND SCAN"
 }
 
 def get_ist_now():
@@ -49,21 +51,92 @@ def get_raxi_period_number(dt):
     round_seq = 9671 + minutes_passed
     return f"{date_prefix}1000{round_seq}"
 
-def smart_prediction(history):
-    last_three = history[-3:]
-    if last_three[0] == last_three[1] == last_three[2]:
-        pred_size = last_three[-1]
-    elif last_three[0] == last_three[2] and last_three[0] != last_three[1]:
-        pred_size = last_three[1]
-    else:
-        pred_size = "SMALL" if last_three[-1] == "BIG" else "BIG"
+def opposite(side):
+    return "SMALL" if side == "BIG" else "BIG"
 
+def smart_prediction(history, num_history, consec_losses):
+    """
+    8-Round Multi-Pattern + Anti-Trap Auto Engine:
+    1. Anti-Trap Mode (2+ lagatar loss par purana pattern tod kar recovery pakadta hai)
+    2. Dragon / Long Streak (4+ same)
+    3. 2-2 Pair Pattern (BB-SS-BB)
+    4. 1-1 Zig-Zag Pattern (B-S-B-S)
+    5. 2-1-2 Sandwich Pattern
+    6. 8-Round Majority Rebalance
+    """
+    h = history[-8:]
+    last1 = h[-1]
+    last2 = h[-2:]
+    last3 = h[-3:]
+    last4 = h[-4:]
+
+    # 1. Anti-Trap Mode: Agar 2 ya zyada lagatar loss ho chuke hain toh trap breaker chalayein
+    if consec_losses >= 2:
+        # Agar pichhle 2 results same aaye hain toh ab break (opposite) pakdein, warna follow karein
+        if last2[0] == last2[1]:
+            pred_size = opposite(last1)
+            strategy = "ANTI-TRAP BREAK"
+        else:
+            pred_size = last1
+            strategy = "ANTI-TRAP LOCK"
+
+    # 2. Dragon Streak (Lagatar 4 same results -> trend follow karein, 6 ke baad reversal)
+    elif len(set(last4)) == 1:
+        if len(h) >= 6 and len(set(h[-6:])) == 1:
+            pred_size = opposite(last1)
+            strategy = "DRAGON REVERSAL"
+        else:
+            pred_size = last1
+            strategy = "DRAGON FOLLOW"
+
+    # 3. 2-2 Pair Pattern (e.g. BIG, BIG, SMALL, SMALL -> next BIG)
+    elif last4[0] == last4[1] and last4[2] == last4[3] and last4[0] != last4[2]:
+        pred_size = opposite(last1)
+        strategy = "2-2 PAIR SHIFT"
+
+    # 4. 1-1 Zig-Zag Pattern (e.g. BIG, SMALL, BIG, SMALL -> next BIG)
+    elif last4[0] != last4[1] and last4[1] != last4[2] and last4[2] != last4[3]:
+        pred_size = opposite(last1)
+        strategy = "ZIG-ZAG FLOW"
+
+    # 5. 2-1-2 Sandwich Pattern (e.g. BIG, SMALL, BIG -> next SMALL)
+    elif last3[0] == last3[2] and last3[0] != last3[1]:
+        pred_size = last3[1]
+        strategy = "MIRROR PATTERN"
+
+    # 6. 3-Streak Start (e.g. BIG, BIG, BIG -> follow 4th)
+    elif last3[0] == last3[1] == last3[2]:
+        pred_size = last1
+        strategy = "STREAK RIDE"
+
+    # 7. 8-Round Balance Check (Jo side kam aayi hai uska mean reversion)
+    else:
+        big_count = h.count("BIG")
+        small_count = h.count("SMALL")
+        if big_count >= 5:
+            pred_size = "SMALL"
+            strategy = "BALANCE SHIFT"
+        elif small_count >= 5:
+            pred_size = "BIG"
+            strategy = "BALANCE SHIFT"
+        else:
+            pred_size = opposite(last1)
+            strategy = "SMART ALTERNATE"
+
+    # Smart Number Selection (jo numbers pichhle 4 rounds mein nahi aaye unhe priority dein)
+    recent_nums = set(num_history[-4:])
     if pred_size == "BIG":
-        pred_nums = sorted(random.sample([5, 6, 7, 8, 9], 2))
+        pool = [5, 6, 7, 8, 9]
     else:
-        pred_nums = sorted(random.sample([0, 1, 2, 3, 4], 2))
+        pool = [0, 1, 2, 3, 4]
 
-    return pred_size, pred_nums
+    fresh_nums = [n for n in pool if n not in recent_nums]
+    if len(fresh_nums) >= 2:
+        pred_nums = sorted(random.sample(fresh_nums, 2))
+    else:
+        pred_nums = sorted(random.sample(pool, 2))
+
+    return pred_size, pred_nums, strategy
 
 def calculate_ratio():
     if stats["total_rounds"] == 0:
@@ -158,9 +231,14 @@ def post_next_prediction():
     current_period = get_raxi_period_number(now)
     stats["current_period"] = current_period
 
-    active_size, active_nums = smart_prediction(stats["history"])
+    active_size, active_nums, strategy = smart_prediction(
+        stats["history"],
+        stats["num_history"],
+        stats["consecutive_losses"]
+    )
     stats["last_size"] = active_size
     stats["last_nums"] = active_nums
+    stats["strategy_used"] = strategy
 
     multiplier = 3 ** (stats["current_level"] - 1)
     size_emoji = "🟢" if active_size == "BIG" else "🔴"
@@ -194,6 +272,7 @@ def handle_action(action, chat_id, message_id):
         stats["losses"] = 0
         stats["total_rounds"] = 0
         stats["current_level"] = 1
+        stats["consecutive_losses"] = 0
 
         tg_send_msg(
             CHANNEL_ID,
@@ -208,7 +287,7 @@ def handle_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
             f"🆔 Active Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
-            f"⏳ Result aane ke baad niche button dabayein:"
+            f"🧠 AI Logic: `{stats['strategy_used']}`"
         )
 
     elif action == "stop_session":
@@ -239,7 +318,9 @@ def handle_action(action, chat_id, message_id):
         stats["total_rounds"] += 1
         stats["wins"] += 1
         stats["current_level"] = 1
+        stats["consecutive_losses"] = 0
         stats["history"].append(stats["last_size"])
+        stats["num_history"].append(random.choice(stats["last_nums"]))
         ratio = calculate_ratio()
 
         tg_send_sticker(CHANNEL_ID, stickers["win"])
@@ -257,8 +338,8 @@ def handle_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"✅ Last: **WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
-            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
-            f"📊 Ratio: `{ratio}%`"
+            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
     elif action == "mark_jackpot":
@@ -270,7 +351,9 @@ def handle_action(action, chat_id, message_id):
         stats["total_rounds"] += 1
         stats["wins"] += 1
         stats["current_level"] = 1
+        stats["consecutive_losses"] = 0
         stats["history"].append(stats["last_size"])
+        stats["num_history"].append(stats["last_nums"][0])
         ratio = calculate_ratio()
         nums_str = f"{stats['last_nums'][0]}, {stats['last_nums'][1]}"
 
@@ -291,8 +374,8 @@ def handle_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"🎰 Last: **JACKPOT WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
-            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
-            f"📊 Ratio: `{ratio}%`"
+            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
     elif action == "mark_loss":
@@ -303,8 +386,11 @@ def handle_action(action, chat_id, message_id):
         stats["total_rounds"] += 1
         stats["losses"] += 1
         stats["current_level"] += 1
-        opp_size = "SMALL" if stats["last_size"] == "BIG" else "BIG"
+        stats["consecutive_losses"] += 1
+        opp_size = opposite(stats["last_size"])
         stats["history"].append(opp_size)
+        opp_pool = [5, 6, 7, 8, 9] if opp_size == "BIG" else [0, 1, 2, 3, 4]
+        stats["num_history"].append(random.choice(opp_pool))
         multiplier = 3 ** (stats["current_level"] - 1)
         ratio = calculate_ratio()
 
@@ -323,13 +409,13 @@ def handle_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"❌ Last: **LOSS** ➔ Next Level: **{multiplier}x**\n"
-            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
-            f"📊 Ratio: `{ratio}%`"
+            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
 @app.route('/')
 def home():
-    return "Raxi Win Webhook Bot is Active!"
+    return "Raxi Win Multi-Pattern Webhook Bot is Active!"
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
@@ -339,7 +425,6 @@ def telegram_webhook():
         msg = upd["message"]
         txt = msg.get("text", "")
 
-        # Agar Admin ne sticker bheja hai toh uski exact file_id save karein
         if "sticker" in msg:
             file_id = msg["sticker"]["file_id"]
             target = stickers["waiting_for"] or "win"
@@ -356,8 +441,8 @@ def telegram_webhook():
             status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
             tg_send_msg(
                 ADMIN_ID,
-                f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\n"
-                f"Pehle niche buttons se apne 3 stickers set kar lein (⚠️ ➔ ✅), phir **START PREDICTION** dabayein:",
+                f"🎛 **RAXI WIN AUTO-SMART PANEL ({status_txt})**\n"
+                f"8-Round Multi-Pattern & Anti-Trap AI active hai:",
                 reply_markup=get_keyboard_json()
             )
 
@@ -385,8 +470,8 @@ def setup_webhook_and_ping():
         )
         tg_send_msg(
             ADMIN_ID,
-            f"🎛 **RAXI WIN STICKER-SETUP PANEL READY!**\n"
-            f"Niche **`⚠️ Set Win Sticker`**, **`⚠️ Set Jackpot Sticker`**, aur **`⚠️ Set Loss Sticker`** daba kar apne teeno stickers bhejein, phir **START PREDICTION** dabayein:",
+            f"🎛 **RAXI WIN AUTO-SMART ENGINE READY!**\n"
+            f"8-Round Multi-Pattern & Anti-Trap AI lag gaya hai. Stickers set karke **START PREDICTION** dabayein:",
             reply_markup=get_keyboard_json()
         )
     except Exception as e:

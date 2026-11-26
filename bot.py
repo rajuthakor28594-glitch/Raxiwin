@@ -14,9 +14,9 @@ BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 ADMIN_ID = 5393186266  # Sirf aapki ID par buttons kaam karenge
 
-# Aapke Telegram Stickers ki File IDs
-WIN_STICKER_ID = "CAACAgUAAxkBAAEk9DBrB-J7q40-uSyXaeY4QbFSWBMuKwACMRUAAsA16FeZI-wzeGAu_T0E"
-LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9ChrB-IpRe3b0bdmmApGZoRKD55tRQACTwMAAk5qkVTbERf7V1MOtD0E"
+# Aapke Naye Telegram Stickers ki File IDs
+WIN_STICKER_ID = "CAACAgUAAxkBAAEk9FxrB-oy8EhdPdWWFCmkPKiDW5DFsQACYREAApgz6Vfar8AGnEwYfj0E"
+LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9GhrB-rUN36F2bm5-UG8Zi_w36ymXgAC_Q8AAgY_CFWSA4EvQDzBXD0E"
 
 TARGET_WINS = 10
 REGISTER_LINK = "https://www.raxiwin.game/#/register?invitationCode=51966105844"
@@ -41,6 +41,7 @@ stats = {
     "losses": 0,
     "current_level": 1,
     "active": False,
+    "waiting_for_result": False,
     "current_period": "",
     "last_size": "BIG",
     "last_nums": [6, 8],
@@ -92,7 +93,7 @@ def get_keyboard_json():
     else:
         keyboard = [
             [
-                {"text": "▶️ START PREDICTION (0/10)", "callback_data": "start_session"}
+                {"text": "▶️ START PREDICTION", "callback_data": "start_session"}
             ]
         ]
     return json.dumps({"inline_keyboard": keyboard})
@@ -128,6 +129,39 @@ def edit_admin_panel(chat_id, message_id, text):
     except Exception as e:
         print(f"Edit Panel Error: {e}")
 
+async def post_next_prediction():
+    """Naya current period nikal kar channel mein next trade post karta hai"""
+    now = get_ist_now()
+    current_period = get_raxi_period_number(now)
+    stats["current_period"] = current_period
+
+    active_size, active_nums = smart_prediction(stats["history"])
+    stats["last_size"] = active_size
+    stats["last_nums"] = active_nums
+
+    multiplier = 3 ** (stats["current_level"] - 1)
+    size_emoji = "🟢" if active_size == "BIG" else "🔴"
+    nums_str = f"{active_nums[0]}, {active_nums[1]}"
+
+    pred_msg = (
+        f"🔥 **RAXI WIN - WINGO 1 MIN** 🔥\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 **Period:** `{current_period}`\n"
+        f"🎯 **Prediction:** **{active_size}** {size_emoji}\n"
+        f"🔢 **Numbers:** **{nums_str}**\n"
+        f"💰 **Level:** `{multiplier}x`\n"
+        f"🏆 **Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 [Play on Raxi Win]({REGISTER_LINK})"
+    )
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=pred_msg,
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True
+    )
+    stats["waiting_for_result"] = True
+
 async def process_admin_action(action, chat_id, message_id):
     period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
 
@@ -137,6 +171,7 @@ async def process_admin_action(action, chat_id, message_id):
         stats["losses"] = 0
         stats["total_rounds"] = 0
         stats["current_level"] = 1
+        stats["waiting_for_result"] = False
 
         await bot.send_message(
             chat_id=CHANNEL_ID,
@@ -149,14 +184,18 @@ async def process_admin_action(action, chat_id, message_id):
             disable_web_page_preview=True
         )
 
+        await post_next_prediction()
+
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
-            f"Agli win par `1/{TARGET_WINS}` ho jayega:"
+            f"🆔 Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
+            f"⏳ Result aane ke baad niche **WIN** ya **LOSS** dabayein:"
         )
 
     elif action == "stop_session":
         stats["active"] = False
+        stats["waiting_for_result"] = False
         ratio = calculate_ratio()
 
         await bot.send_message(
@@ -172,9 +211,9 @@ async def process_admin_action(action, chat_id, message_id):
 
         edit_admin_panel(
             chat_id, message_id,
-            f"🔴 **PREDICTION STOPPED ({stats['wins']}/{TARGET_WINS})**\n"
-            f"📊 Last Session Ratio: `{ratio}%`\n"
-            f"Naya session `0/10` se shuru karne ke liye **START** dabayein:"
+            f"🔴 **PREDICTION STOPPED**\n"
+            f"📊 Final Ratio: `{ratio}%` ({stats['wins']}W / {stats['losses']}L)\n"
+            f"Dobara shuru karne ke liye **START PREDICTION** dabayein:"
         )
 
     elif action == "mark_win":
@@ -189,7 +228,7 @@ async def process_admin_action(action, chat_id, message_id):
         stats["history"].append(stats["last_size"])
         ratio = calculate_ratio()
 
-        # 1. Win Sticker bhejein
+        # 1. Naya Win Sticker bhejein
         await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
 
         # 2. 0/10 -> 1/10 -> 2/10... progression aur Ratio bhejein
@@ -203,32 +242,16 @@ async def process_admin_action(action, chat_id, message_id):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # 10/10 Wins poori hote hi Auto-Stop
-        if stats["wins"] >= TARGET_WINS:
-            stats["active"] = False
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=(
-                    f"🎉 **TARGET COMPLETE ({TARGET_WINS}/{TARGET_WINS} WINS)!** 🎉\n"
-                    f"🛑 Session yahan successfully stop kiya ja raha hai.\n"
-                    f"📈 **Final Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)\n"
-                    f"Agle session ke liye ready rahein!"
-                ),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            edit_admin_panel(
-                chat_id, message_id,
-                f"🏆 **10/10 WINS COMPLETE! AUTO-STOPPED**\n"
-                f"📈 Final Ratio: `{ratio}%`\n"
-                f"Naya session `0/10` se shuru karne ke liye START dabayein:"
-            )
-            return
+        # 3. Result dalte hi agla trade bhejein
+        await asyncio.sleep(2)
+        await post_next_prediction()
 
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-            f"✅ Progress: `{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`\n"
-            f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
+            f"✅ Last: **WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
+            f"🆔 Next Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
+            f"📊 Ratio: `{ratio}%` | Agla Level: `1x`"
         )
 
     elif action == "mark_loss":
@@ -244,7 +267,7 @@ async def process_admin_action(action, chat_id, message_id):
         multiplier = 3 ** (stats["current_level"] - 1)
         ratio = calculate_ratio()
 
-        # 3X Loss Sticker aur Alert bhejein
+        # 1. Naya Loss Sticker aur Alert bhejein
         await bot.send_sticker(chat_id=CHANNEL_ID, sticker=LOSS_3X_STICKER_ID)
         await bot.send_message(
             chat_id=CHANNEL_ID,
@@ -256,18 +279,21 @@ async def process_admin_action(action, chat_id, message_id):
             parse_mode=ParseMode.MARKDOWN
         )
 
+        # 2. Loss dalte hi agla trade (3X level ke saath) bhejein
+        await asyncio.sleep(2)
+        await post_next_prediction()
+
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-            f"❌ Last: **LOSS** (Agla Round: **{multiplier}x**)\n"
-            f"🆔 Period: `{stats['current_period']}` | Ratio: `{ratio}%`"
+            f"❌ Last: **LOSS** ➔ Next Level: **{multiplier}x**\n"
+            f"🆔 Next Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
+            f"📊 Ratio: `{ratio}%`"
         )
 
 async def main_loop():
-    last_predicted_period = None
     offset = 0
 
-    # Purane pending updates clear karein
     try:
         r = requests.get(f"{TG_API}/getUpdates", params={"offset": -1}, timeout=5).json()
         if r.get("result"):
@@ -275,30 +301,26 @@ async def main_loop():
     except Exception:
         pass
 
-    # Deploy hote hi aapko Control Panel bhejein
     send_admin_panel(
         f"🎛 **RAXI WIN CONTROL PANEL READY!**\n"
-        f"Session `0/{TARGET_WINS}` se shuru karne ke liye niche **START PREDICTION** dabayein:"
+        f"Naye Win/Loss stickers update ho gaye hain. Shuru karne ke liye **START PREDICTION** dabayein:"
     )
 
     while True:
-        # 1. Admin ke /start ya Button clicks check karein
         try:
             res = requests.get(f"{TG_API}/getUpdates", params={"offset": offset, "timeout": 1}, timeout=5).json()
             for upd in res.get("result", []):
                 offset = upd["update_id"] + 1
 
-                # Agar aapne /start bheja ho
                 if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
                     txt = upd["message"].get("text", "")
                     if txt.startswith("/start"):
-                        status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED (0/10)"
+                        status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
                         send_admin_panel(
                             f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\n"
-                            f"Niche buttons se Prediction Start/Stop aur Win/Loss control karein:"
+                            f"Niche buttons se control karein:"
                         )
 
-                # Agar aapne koi Button dabaya ho
                 elif "callback_query" in upd:
                     cb = upd["callback_query"]
                     if cb.get("from", {}).get("id") == ADMIN_ID:
@@ -309,43 +331,6 @@ async def main_loop():
                         await process_admin_action(action, chat_id, msg_id)
         except Exception as e:
             print(f"Update check error: {e}")
-
-        # 2. Agar session START hai toh har naye minute par Prediction bhejein
-        if stats["active"]:
-            now = get_ist_now()
-            current_period = get_raxi_period_number(now)
-
-            if current_period != last_predicted_period:
-                last_predicted_period = current_period
-                stats["current_period"] = current_period
-
-                active_size, active_nums = smart_prediction(stats["history"])
-                stats["last_size"] = active_size
-                stats["last_nums"] = active_nums
-
-                multiplier = 3 ** (stats["current_level"] - 1)
-                size_emoji = "🟢" if active_size == "BIG" else "🔴"
-                nums_str = f"{active_nums[0]}, {active_nums[1]}"
-
-                pred_msg = (
-                    f"🔥 **RAXI WIN - WINGO 1 MIN** 🔥\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🆔 **Period:** `{current_period}`\n"
-                    f"🎯 **Prediction:** **{active_size}** {size_emoji}\n"
-                    f"🔢 **Numbers:** **{nums_str}**\n"
-                    f"💰 **Level:** `{multiplier}x`\n"
-                    f"🏆 **Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🔗 [Play on Raxi Win]({REGISTER_LINK})"
-                )
-                await bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=pred_msg,
-                    parse_mode=ParseMode.MARKDOWN,
-                    disable_web_page_preview=True
-                )
-        else:
-            last_predicted_period = None
 
         await asyncio.sleep(1)
 

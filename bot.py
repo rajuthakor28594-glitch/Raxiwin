@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import json
 import os
@@ -6,7 +5,7 @@ import random
 import threading
 import time
 import requests
-from flask import Flask
+from flask import Flask, request
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -27,25 +26,6 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # =================================================
 
 app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Raxi Win 1-Min Admin Control Bot is Running!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-def keep_alive_pinger():
-    """Har 10 minute mein Render server ko ping karta hai taaki bot sleep na ho"""
-    while True:
-        time.sleep(600)
-        try:
-            requests.get(RENDER_URL, timeout=10)
-        except Exception:
-            pass
-
-bot = Bot(token=BOT_TOKEN)
 
 stats = {
     "total_rounds": 0,
@@ -112,20 +92,25 @@ def get_keyboard_json():
         ]
     return json.dumps({"inline_keyboard": keyboard})
 
-def send_admin_panel(text):
+def tg_send_msg(chat_id, text, reply_markup=None):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
-        requests.post(
-            f"{TG_API}/sendMessage",
-            data={
-                "chat_id": ADMIN_ID,
-                "text": text,
-                "parse_mode": "Markdown",
-                "reply_markup": get_keyboard_json()
-            },
-            timeout=10
-        )
+        requests.post(f"{TG_API}/sendMessage", data=payload, timeout=10)
     except Exception as e:
-        print(f"Admin Panel Error: {e}")
+        print(f"Send Msg Error: {e}")
+
+def tg_send_sticker(chat_id, sticker_id):
+    try:
+        requests.post(f"{TG_API}/sendSticker", data={"chat_id": chat_id, "sticker": sticker_id}, timeout=10)
+    except Exception as e:
+        print(f"Send Sticker Error: {e}")
 
 def edit_admin_panel(chat_id, message_id, text):
     try:
@@ -143,8 +128,7 @@ def edit_admin_panel(chat_id, message_id, text):
     except Exception as e:
         print(f"Edit Panel Error: {e}")
 
-async def post_next_prediction():
-    """Naya current period nikal kar channel mein next trade post karta hai"""
+def post_next_prediction():
     now = get_ist_now()
     current_period = get_raxi_period_number(now)
     stats["current_period"] = current_period
@@ -168,14 +152,9 @@ async def post_next_prediction():
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🔗 [Play on Raxi Win]({REGISTER_LINK})"
     )
-    await bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=pred_msg,
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True
-    )
+    tg_send_msg(CHANNEL_ID, pred_msg)
 
-async def process_admin_action(action, chat_id, message_id):
+def handle_action(action, chat_id, message_id):
     period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
 
     if action == "start_session":
@@ -185,18 +164,14 @@ async def process_admin_action(action, chat_id, message_id):
         stats["total_rounds"] = 0
         stats["current_level"] = 1
 
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"🔥 **RAXI WIN - WINGO 1 MIN STARTED!** 🔥\n"
-                f"🎯 **Session Target:** `0/{TARGET_WINS} Wins`\n"
-                f"🔗 **Register:** [Click Here to Join]({REGISTER_LINK})"
-            ),
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
+        tg_send_msg(
+            CHANNEL_ID,
+            f"🔥 **RAXI WIN - WINGO 1 MIN STARTED!** 🔥\n"
+            f"🎯 **Session Target:** `0/{TARGET_WINS} Wins`\n"
+            f"🔗 **Register:** [Click Here to Join]({REGISTER_LINK})"
         )
 
-        await post_next_prediction()
+        post_next_prediction()
 
         edit_admin_panel(
             chat_id, message_id,
@@ -209,15 +184,12 @@ async def process_admin_action(action, chat_id, message_id):
         stats["active"] = False
         ratio = calculate_ratio()
 
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"🛑 **PREDICTION SESSION STOPPED!**\n"
-                f"🏆 **Total Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
-                f"📈 **Final Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)\n"
-                f"Agle session ke liye ready rahein!"
-            ),
-            parse_mode=ParseMode.MARKDOWN
+        tg_send_msg(
+            CHANNEL_ID,
+            f"🛑 **PREDICTION SESSION STOPPED!**\n"
+            f"🏆 **Total Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
+            f"📈 **Final Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)\n"
+            f"Agle session ke liye ready rahein!"
         )
 
         edit_admin_panel(
@@ -239,22 +211,16 @@ async def process_admin_action(action, chat_id, message_id):
         stats["history"].append(stats["last_size"])
         ratio = calculate_ratio()
 
-        # 1. Normal Win Sticker bhejein
-        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
-
-        # 2. Winning Target progression aur Ratio bhejein
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
-                f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** PASS\n"
-                f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
-            ),
-            parse_mode=ParseMode.MARKDOWN
+        tg_send_sticker(CHANNEL_ID, WIN_STICKER_ID)
+        tg_send_msg(
+            CHANNEL_ID,
+            f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
+            f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** PASS\n"
+            f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
 
-        await asyncio.sleep(2)
-        await post_next_prediction()
+        time.sleep(1.5)
+        post_next_prediction()
 
         edit_admin_panel(
             chat_id, message_id,
@@ -277,24 +243,18 @@ async def process_admin_action(action, chat_id, message_id):
         ratio = calculate_ratio()
         nums_str = f"{stats['last_nums'][0]}, {stats['last_nums'][1]}"
 
-        # 1. Dono Stickers bhejein (Pehle Win Sticker, phir Jackpot Number Sticker)
-        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
-        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=JACKPOT_STICKER_ID)
-
-        # 2. Jackpot Number Win message + Win Count update bhejein
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"🎰 **JACKPOT NUMBER WIN!** 🎰\n"
-                f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
-                f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** & Number (**{nums_str}**) PASS!\n"
-                f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
-            ),
-            parse_mode=ParseMode.MARKDOWN
+        tg_send_sticker(CHANNEL_ID, WIN_STICKER_ID)
+        tg_send_sticker(CHANNEL_ID, JACKPOT_STICKER_ID)
+        tg_send_msg(
+            CHANNEL_ID,
+            f"🎰 **JACKPOT NUMBER WIN!** 🎰\n"
+            f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
+            f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** & Number (**{nums_str}**) PASS!\n"
+            f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
 
-        await asyncio.sleep(2)
-        await post_next_prediction()
+        time.sleep(1.5)
+        post_next_prediction()
 
         edit_admin_panel(
             chat_id, message_id,
@@ -317,20 +277,16 @@ async def process_admin_action(action, chat_id, message_id):
         multiplier = 3 ** (stats["current_level"] - 1)
         ratio = calculate_ratio()
 
-        # 1. Naya Loss Sticker aur Alert bhejein
-        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=LOSS_3X_STICKER_ID)
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"❌ **LOSS** | Period: `{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
-                f"⚠️ **Agle Round mein {multiplier}x Fund lagayein!**\n"
-                f"📊 **Current Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
-            ),
-            parse_mode=ParseMode.MARKDOWN
+        tg_send_sticker(CHANNEL_ID, LOSS_3X_STICKER_ID)
+        tg_send_msg(
+            CHANNEL_ID,
+            f"❌ **LOSS** | Period: `{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
+            f"⚠️ **Agle Round mein {multiplier}x Fund lagayein!**\n"
+            f"📊 **Current Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
 
-        await asyncio.sleep(2)
-        await post_next_prediction()
+        time.sleep(1.5)
+        post_next_prediction()
 
         edit_admin_panel(
             chat_id, message_id,
@@ -340,51 +296,63 @@ async def process_admin_action(action, chat_id, message_id):
             f"📊 Ratio: `{ratio}%`"
         )
 
-async def main_loop():
-    offset = 0
+@app.route('/')
+def home():
+    return "Raxi Win Webhook Bot is Active!"
 
+@app.route('/webhook', methods=['POST'])
+def telegram_webhook():
+    upd = request.get_json(silent=True) or {}
+
+    if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
+        txt = upd["message"].get("text", "")
+        if txt.startswith("/start"):
+            status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
+            tg_send_msg(
+                ADMIN_ID,
+                f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\nNiche buttons se control karein:",
+                reply_markup=get_keyboard_json()
+            )
+
+    elif "callback_query" in upd:
+        cb = upd["callback_query"]
+        if cb.get("from", {}).get("id") == ADMIN_ID:
+            try:
+                requests.post(f"{TG_API}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=5)
+            except Exception:
+                pass
+            action = cb.get("data")
+            chat_id = cb["message"]["chat"]["id"]
+            msg_id = cb["message"]["message_id"]
+            threading.Thread(target=handle_action, args=(action, chat_id, msg_id), daemon=True).start()
+
+    return "OK", 200
+
+def setup_webhook_and_ping():
+    time.sleep(3)
     try:
-        r = requests.get(f"{TG_API}/getUpdates", params={"offset": -1}, timeout=5).json()
-        if r.get("result"):
-            offset = r["result"][-1]["update_id"] + 1
-    except Exception:
-        pass
-
-    send_admin_panel(
-        f"🎛 **RAXI WIN CONTROL PANEL READY!**\n"
-        f"Teeno naye stickers aur **🎰 JACKPOT WIN** button update ho gaye hain.\n"
-        f"Shuru karne ke liye **START PREDICTION** dabayein:"
-    )
+        requests.post(
+            f"{TG_API}/setWebhook",
+            data={"url": f"{RENDER_URL}/webhook", "drop_pending_updates": True},
+            timeout=10
+        )
+        tg_send_msg(
+            ADMIN_ID,
+            f"🎛 **RAXI WIN WEBHOOK PANEL READY!**\n"
+            f"Ab buttons bina ruke turant kaam karenge. Shuru karne ke liye **START PREDICTION** dabayein:",
+            reply_markup=get_keyboard_json()
+        )
+    except Exception as e:
+        print(f"Webhook Setup Error: {e}")
 
     while True:
+        time.sleep(600)
         try:
-            res = requests.get(f"{TG_API}/getUpdates", params={"offset": offset, "timeout": 1}, timeout=5).json()
-            for upd in res.get("result", []):
-                offset = upd["update_id"] + 1
-
-                if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
-                    txt = upd["message"].get("text", "")
-                    if txt.startswith("/start"):
-                        status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
-                        send_admin_panel(
-                            f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\n"
-                            f"Niche buttons se control karein:"
-                        )
-
-                elif "callback_query" in upd:
-                    cb = upd["callback_query"]
-                    if cb.get("from", {}).get("id") == ADMIN_ID:
-                        requests.post(f"{TG_API}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=5)
-                        action = cb.get("data")
-                        chat_id = cb["message"]["chat"]["id"]
-                        msg_id = cb["message"]["message_id"]
-                        await process_admin_action(action, chat_id, msg_id)
-        except Exception as e:
-            print(f"Update check error: {e}")
-
-        await asyncio.sleep(1)
+            requests.get(RENDER_URL, timeout=10)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    threading.Thread(target=run_web, daemon=True).start()
-    threading.Thread(target=keep_alive_pinger, daemon=True).start()
-    asyncio.run(main_loop())
+    threading.Thread(target=setup_webhook_and_ping, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)

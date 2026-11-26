@@ -6,18 +6,11 @@ import threading
 import time
 import requests
 from flask import Flask, request
-from telegram import Bot
-from telegram.constants import ParseMode
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
-ADMIN_ID = 5393186266  # Sirf aapki ID par buttons kaam karenge
-
-# Aapke Teeno Naye Telegram Stickers ki File IDs
-WIN_STICKER_ID = "CAACAgUAAxkBAAEk9IRrB_GSO5UIfZQftzfQFE8svAbQaQAC_x8AAggtMFbkJANnlpbxHz0E"
-JACKPOT_STICKER_ID = "CAACAgUAAxkBAAEk9IZrB_HKtsW4aNvLbiremRn0j9Db8AACuBcAAjH9wFY9iSPUQkDLej0E"
-LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9H5rB_EPVt_xMlrn1vf_yYsOUwh0CQAckBEAAi4AATBXrdSO4Z9ezAM9BA"
+ADMIN_ID = 5393186266
 
 TARGET_WINS = 10
 REGISTER_LINK = "https://www.raxiwin.game/#/register?invitationCode=51966105844"
@@ -26,6 +19,14 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # =================================================
 
 app = Flask(__name__)
+
+# Yahan aapke khud ke bot se bheje gaye stickers save honge
+stickers = {
+    "win": "",
+    "jackpot": "",
+    "loss": "",
+    "waiting_for": None  # 'win', 'jackpot', ya 'loss'
+}
 
 stats = {
     "total_rounds": 0,
@@ -71,6 +72,10 @@ def calculate_ratio():
 
 def get_keyboard_json():
     next_mult = 3 ** stats["current_level"]
+    w_ok = "✅" if stickers["win"] else "⚠️"
+    j_ok = "✅" if stickers["jackpot"] else "⚠️"
+    l_ok = "✅" if stickers["loss"] else "⚠️"
+
     if stats["active"]:
         keyboard = [
             [
@@ -82,12 +87,24 @@ def get_keyboard_json():
             ],
             [
                 {"text": "🛑 STOP PREDICTION", "callback_data": "stop_session"}
+            ],
+            [
+                {"text": f"{w_ok} Set Win", "callback_data": "set_win"},
+                {"text": f"{j_ok} Set Jackpot", "callback_data": "set_jackpot"},
+                {"text": f"{l_ok} Set Loss", "callback_data": "set_loss"}
             ]
         ]
     else:
         keyboard = [
             [
                 {"text": "▶️ START PREDICTION", "callback_data": "start_session"}
+            ],
+            [
+                {"text": f"{w_ok} Set Win Sticker", "callback_data": "set_win"},
+                {"text": f"{j_ok} Set Jackpot Sticker", "callback_data": "set_jackpot"}
+            ],
+            [
+                {"text": f"{l_ok} Set Loss Sticker", "callback_data": "set_loss"}
             ]
         ]
     return json.dumps({"inline_keyboard": keyboard})
@@ -102,13 +119,21 @@ def tg_send_msg(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        requests.post(f"{TG_API}/sendMessage", data=payload, timeout=10)
+        requests.post(f"{TG_API}/sendMessage", json=payload, timeout=10)
     except Exception as e:
         print(f"Send Msg Error: {e}")
 
 def tg_send_sticker(chat_id, sticker_id):
+    if not sticker_id:
+        return
     try:
-        requests.post(f"{TG_API}/sendSticker", data={"chat_id": chat_id, "sticker": sticker_id}, timeout=10)
+        res = requests.post(
+            f"{TG_API}/sendSticker",
+            json={"chat_id": chat_id, "sticker": sticker_id},
+            timeout=10
+        ).json()
+        if not res.get("ok"):
+            tg_send_msg(ADMIN_ID, f"⚠️ Sticker Error: `{res.get('description')}`")
     except Exception as e:
         print(f"Send Sticker Error: {e}")
 
@@ -116,12 +141,12 @@ def edit_admin_panel(chat_id, message_id, text):
     try:
         requests.post(
             f"{TG_API}/editMessageText",
-            data={
+            json={
                 "chat_id": chat_id,
                 "message_id": message_id,
                 "text": text,
                 "parse_mode": "Markdown",
-                "reply_markup": get_keyboard_json()
+                "reply_markup": json.loads(get_keyboard_json())
             },
             timeout=10
         )
@@ -156,6 +181,12 @@ def post_next_prediction():
 
 def handle_action(action, chat_id, message_id):
     period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
+
+    if action in ["set_win", "set_jackpot", "set_loss"]:
+        key = action.replace("set_", "")
+        stickers["waiting_for"] = key
+        tg_send_msg(ADMIN_ID, f"👇 Ab apna **{key.upper()} STICKER** is chat mein bhejein (send karein):")
+        return
 
     if action == "start_session":
         stats["active"] = True
@@ -211,7 +242,7 @@ def handle_action(action, chat_id, message_id):
         stats["history"].append(stats["last_size"])
         ratio = calculate_ratio()
 
-        tg_send_sticker(CHANNEL_ID, WIN_STICKER_ID)
+        tg_send_sticker(CHANNEL_ID, stickers["win"])
         tg_send_msg(
             CHANNEL_ID,
             f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
@@ -243,8 +274,8 @@ def handle_action(action, chat_id, message_id):
         ratio = calculate_ratio()
         nums_str = f"{stats['last_nums'][0]}, {stats['last_nums'][1]}"
 
-        tg_send_sticker(CHANNEL_ID, WIN_STICKER_ID)
-        tg_send_sticker(CHANNEL_ID, JACKPOT_STICKER_ID)
+        tg_send_sticker(CHANNEL_ID, stickers["win"])
+        tg_send_sticker(CHANNEL_ID, stickers["jackpot"])
         tg_send_msg(
             CHANNEL_ID,
             f"🎰 **JACKPOT NUMBER WIN!** 🎰\n"
@@ -277,7 +308,7 @@ def handle_action(action, chat_id, message_id):
         multiplier = 3 ** (stats["current_level"] - 1)
         ratio = calculate_ratio()
 
-        tg_send_sticker(CHANNEL_ID, LOSS_3X_STICKER_ID)
+        tg_send_sticker(CHANNEL_ID, stickers["loss"])
         tg_send_msg(
             CHANNEL_ID,
             f"❌ **LOSS** | Period: `{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
@@ -305,12 +336,28 @@ def telegram_webhook():
     upd = request.get_json(silent=True) or {}
 
     if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
-        txt = upd["message"].get("text", "")
+        msg = upd["message"]
+        txt = msg.get("text", "")
+
+        # Agar Admin ne sticker bheja hai toh uski exact file_id save karein
+        if "sticker" in msg:
+            file_id = msg["sticker"]["file_id"]
+            target = stickers["waiting_for"] or "win"
+            stickers[target] = file_id
+            stickers["waiting_for"] = None
+            tg_send_msg(
+                ADMIN_ID,
+                f"✅ **{target.upper()} STICKER SAVED!**\nAb channel mein 100% sticker jayega:",
+                reply_markup=get_keyboard_json()
+            )
+            return "OK", 200
+
         if txt.startswith("/start"):
             status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
             tg_send_msg(
                 ADMIN_ID,
-                f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\nNiche buttons se control karein:",
+                f"🎛 **RAXI WIN CONTROL PANEL ({status_txt})**\n"
+                f"Pehle niche buttons se apne 3 stickers set kar lein (⚠️ ➔ ✅), phir **START PREDICTION** dabayein:",
                 reply_markup=get_keyboard_json()
             )
 
@@ -318,7 +365,7 @@ def telegram_webhook():
         cb = upd["callback_query"]
         if cb.get("from", {}).get("id") == ADMIN_ID:
             try:
-                requests.post(f"{TG_API}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=5)
+                requests.post(f"{TG_API}/answerCallbackQuery", json={"callback_query_id": cb["id"]}, timeout=5)
             except Exception:
                 pass
             action = cb.get("data")
@@ -333,13 +380,13 @@ def setup_webhook_and_ping():
     try:
         requests.post(
             f"{TG_API}/setWebhook",
-            data={"url": f"{RENDER_URL}/webhook", "drop_pending_updates": True},
+            json={"url": f"{RENDER_URL}/webhook", "drop_pending_updates": True},
             timeout=10
         )
         tg_send_msg(
             ADMIN_ID,
-            f"🎛 **RAXI WIN WEBHOOK PANEL READY!**\n"
-            f"Ab buttons bina ruke turant kaam karenge. Shuru karne ke liye **START PREDICTION** dabayein:",
+            f"🎛 **RAXI WIN STICKER-SETUP PANEL READY!**\n"
+            f"Niche **`⚠️ Set Win Sticker`**, **`⚠️ Set Jackpot Sticker`**, aur **`⚠️ Set Loss Sticker`** daba kar apne teeno stickers bhejein, phir **START PREDICTION** dabayein:",
             reply_markup=get_keyboard_json()
         )
     except Exception as e:

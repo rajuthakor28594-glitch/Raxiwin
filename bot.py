@@ -10,20 +10,20 @@ from telegram.constants import ParseMode
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
-CHANNEL_ID = "-1005393186266"
+CHANNEL_ID = "-1002395334740"
 
-# Apne Telegram Stickers ki File ID yahan dalein (@idbot se nikal kar)
-WIN_STICKER_ID = "YAHAN_WIN_STICKER_ID_DALEIN"
-LOSS_3X_STICKER_ID = "YAHAN_3X_LOSS_STICKER_ID_DALEIN"
+# Aapke Telegram Stickers ki File IDs
+WIN_STICKER_ID = "CAACAgUAAxkBAAEk9DBrB-J7q40-uSyXaeY4QbFSWBMuKwACMRUAAsA16FeZI-wzeGAu_T0E"
+LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9ChrB-IpRe3b0bdmmApGZoRKD55tRQACTwMAAk5qkVTbERf7V1MOtD0E"
 
-# Target Setting: Kitni wins par bot band hona chahiye
+# Target Setting: 10 wins complete hote hi bot band ho jayega
 TARGET_WINS = 10
 
 # Platform API URL
 API_URL = "https://api.bdg88zf.com/api/webapi/GetNoaverageEmerdList"
 # =================================================
 
-# Render par bot ko zinda rakhne ke liye mini web server
+# Render par bot ko active rakhne ke liye web server
 app = Flask(__name__)
 
 @app.route('/')
@@ -172,7 +172,5 @@ async def send_prediction_loop():
         await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    # Flask server background mein start karein
     threading.Thread(target=run_web, daemon=True).start()
-    # Prediction bot loop start karein
     asyncio.run(send_prediction_loop())

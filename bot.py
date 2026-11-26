@@ -4,6 +4,7 @@ import json
 import os
 import random
 import threading
+import time
 import requests
 from flask import Flask
 from telegram import Bot
@@ -14,12 +15,14 @@ BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
 CHANNEL_ID = "-1002395334740"
 ADMIN_ID = 5393186266  # Sirf aapki ID par buttons kaam karenge
 
-# Aapke Naye Telegram Stickers ki File IDs
-WIN_STICKER_ID = "CAACAgUAAxkBAAEk9FxrB-oy8EhdPdWWFCmkPKiDW5DFsQACYREAApgz6Vfar8AGnEwYfj0E"
-LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9GhrB-rUN36F2bm5-UG8Zi_w36ymXgAC_Q8AAgY_CFWSA4EvQDzBXD0E"
+# Aapke Teeno Naye Telegram Stickers ki File IDs
+WIN_STICKER_ID = "CAACAgUAAxkBAAEk9IRrB_GSO5UIfZQftzfQFE8svAbQaQAC_x8AAggtMFbkJANnlpbxHz0E"
+JACKPOT_STICKER_ID = "CAACAgUAAxkBAAEk9IZrB_HKtsW4aNvLbiremRn0j9Db8AACuBcAAjH9wFY9iSPUQkDLej0E"
+LOSS_3X_STICKER_ID = "CAACAgUAAxkBAAEk9H5rB_EPVt_xMlrn1vf_yYsOUwh0CQAckBEAAi4AATBXrdSO4Z9ezAM9BA"
 
 TARGET_WINS = 10
 REGISTER_LINK = "https://www.raxiwin.game/#/register?invitationCode=51966105844"
+RENDER_URL = "https://raxiwin.onrender.com"
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # =================================================
 
@@ -33,6 +36,15 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
+def keep_alive_pinger():
+    """Har 10 minute mein Render server ko ping karta hai taaki bot sleep na ho"""
+    while True:
+        time.sleep(600)
+        try:
+            requests.get(RENDER_URL, timeout=10)
+        except Exception:
+            pass
+
 bot = Bot(token=BOT_TOKEN)
 
 stats = {
@@ -41,7 +53,6 @@ stats = {
     "losses": 0,
     "current_level": 1,
     "active": False,
-    "waiting_for_result": False,
     "current_period": "",
     "last_size": "BIG",
     "last_nums": [6, 8],
@@ -85,6 +96,9 @@ def get_keyboard_json():
             [
                 {"text": f"✅ WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_win"},
                 {"text": f"❌ LOSS ({next_mult}X)", "callback_data": "mark_loss"}
+            ],
+            [
+                {"text": f"🎰 JACKPOT WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_jackpot"}
             ],
             [
                 {"text": "🛑 STOP PREDICTION", "callback_data": "stop_session"}
@@ -160,7 +174,6 @@ async def post_next_prediction():
         parse_mode=ParseMode.MARKDOWN,
         disable_web_page_preview=True
     )
-    stats["waiting_for_result"] = True
 
 async def process_admin_action(action, chat_id, message_id):
     period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
@@ -171,7 +184,6 @@ async def process_admin_action(action, chat_id, message_id):
         stats["losses"] = 0
         stats["total_rounds"] = 0
         stats["current_level"] = 1
-        stats["waiting_for_result"] = False
 
         await bot.send_message(
             chat_id=CHANNEL_ID,
@@ -189,13 +201,12 @@ async def process_admin_action(action, chat_id, message_id):
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
-            f"🆔 Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
-            f"⏳ Result aane ke baad niche **WIN** ya **LOSS** dabayein:"
+            f"🆔 Active Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"⏳ Result aane ke baad niche button dabayein:"
         )
 
     elif action == "stop_session":
         stats["active"] = False
-        stats["waiting_for_result"] = False
         ratio = calculate_ratio()
 
         await bot.send_message(
@@ -228,10 +239,10 @@ async def process_admin_action(action, chat_id, message_id):
         stats["history"].append(stats["last_size"])
         ratio = calculate_ratio()
 
-        # 1. Naya Win Sticker bhejein
+        # 1. Normal Win Sticker bhejein
         await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
 
-        # 2. 0/10 -> 1/10 -> 2/10... progression aur Ratio bhejein
+        # 2. Winning Target progression aur Ratio bhejein
         await bot.send_message(
             chat_id=CHANNEL_ID,
             text=(
@@ -242,7 +253,6 @@ async def process_admin_action(action, chat_id, message_id):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # 3. Result dalte hi agla trade bhejein
         await asyncio.sleep(2)
         await post_next_prediction()
 
@@ -250,8 +260,48 @@ async def process_admin_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"✅ Last: **WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
-            f"🆔 Next Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
-            f"📊 Ratio: `{ratio}%` | Agla Level: `1x`"
+            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"📊 Ratio: `{ratio}%`"
+        )
+
+    elif action == "mark_jackpot":
+        if not stats["active"]:
+            edit_admin_panel(chat_id, message_id, "🔴 Prediction band hai. Pehle START dabayein:")
+            return
+
+        prev_wins = stats["wins"]
+        stats["total_rounds"] += 1
+        stats["wins"] += 1
+        stats["current_level"] = 1
+        stats["history"].append(stats["last_size"])
+        ratio = calculate_ratio()
+        nums_str = f"{stats['last_nums'][0]}, {stats['last_nums'][1]}"
+
+        # 1. Dono Stickers bhejein (Pehle Win Sticker, phir Jackpot Number Sticker)
+        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=WIN_STICKER_ID)
+        await bot.send_sticker(chat_id=CHANNEL_ID, sticker=JACKPOT_STICKER_ID)
+
+        # 2. Jackpot Number Win message + Win Count update bhejein
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=(
+                f"🎰 **JACKPOT NUMBER WIN!** 🎰\n"
+                f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
+                f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** & Number (**{nums_str}**) PASS!\n"
+                f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
+            ),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        await asyncio.sleep(2)
+        await post_next_prediction()
+
+        edit_admin_panel(
+            chat_id, message_id,
+            f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
+            f"🎰 Last: **JACKPOT WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
+            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"📊 Ratio: `{ratio}%`"
         )
 
     elif action == "mark_loss":
@@ -279,7 +329,6 @@ async def process_admin_action(action, chat_id, message_id):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # 2. Loss dalte hi agla trade (3X level ke saath) bhejein
         await asyncio.sleep(2)
         await post_next_prediction()
 
@@ -287,7 +336,7 @@ async def process_admin_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"❌ Last: **LOSS** ➔ Next Level: **{multiplier}x**\n"
-            f"🆔 Next Active Period: `{stats['current_period']}` (`{stats['last_size']}`)\n"
+            f"🆔 Next Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
             f"📊 Ratio: `{ratio}%`"
         )
 
@@ -303,7 +352,8 @@ async def main_loop():
 
     send_admin_panel(
         f"🎛 **RAXI WIN CONTROL PANEL READY!**\n"
-        f"Naye Win/Loss stickers update ho gaye hain. Shuru karne ke liye **START PREDICTION** dabayein:"
+        f"Teeno naye stickers aur **🎰 JACKPOT WIN** button update ho gaye hain.\n"
+        f"Shuru karne ke liye **START PREDICTION** dabayein:"
     )
 
     while True:
@@ -336,4 +386,5 @@ async def main_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=keep_alive_pinger, daemon=True).start()
     asyncio.run(main_loop())

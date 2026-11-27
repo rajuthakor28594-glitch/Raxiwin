@@ -1,4 +1,5 @@
 import datetime
+import io
 import json
 import os
 import random
@@ -6,6 +7,7 @@ import threading
 import time
 import requests
 from flask import Flask, request
+from PIL import Image, ImageDraw, ImageFont
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "9254738470:AAG85xqtnBcfFlpWX0_Eonq3p_iv8srpVlk"
@@ -20,13 +22,6 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 app = Flask(__name__)
 
-stickers = {
-    "win": "",
-    "jackpot": "",
-    "loss": "",
-    "waiting_for": None
-}
-
 stats = {
     "total_rounds": 0,
     "wins": 0,
@@ -36,7 +31,7 @@ stats = {
     "active": False,
     "current_period": "",
     "last_size": "BIG",
-    "last_nums": [6, 8],
+    "last_nums": [5, 7],
     "history": ["BIG", "SMALL", "BIG", "BIG", "SMALL", "SMALL", "BIG", "SMALL"],
     "num_history": [7, 2, 6, 8, 1, 4, 9, 3],
     "strategy_used": "TREND SCAN"
@@ -55,32 +50,19 @@ def opposite(side):
     return "SMALL" if side == "BIG" else "BIG"
 
 def smart_prediction(history, num_history, consec_losses):
-    """
-    8-Round Multi-Pattern + Anti-Trap Auto Engine:
-    1. Anti-Trap Mode (2+ lagatar loss par purana pattern tod kar recovery pakadta hai)
-    2. Dragon / Long Streak (4+ same)
-    3. 2-2 Pair Pattern (BB-SS-BB)
-    4. 1-1 Zig-Zag Pattern (B-S-B-S)
-    5. 2-1-2 Sandwich Pattern
-    6. 8-Round Majority Rebalance
-    """
     h = history[-8:]
     last1 = h[-1]
     last2 = h[-2:]
     last3 = h[-3:]
     last4 = h[-4:]
 
-    # 1. Anti-Trap Mode: Agar 2 ya zyada lagatar loss ho chuke hain toh trap breaker chalayein
     if consec_losses >= 2:
-        # Agar pichhle 2 results same aaye hain toh ab break (opposite) pakdein, warna follow karein
         if last2[0] == last2[1]:
             pred_size = opposite(last1)
             strategy = "ANTI-TRAP BREAK"
         else:
             pred_size = last1
             strategy = "ANTI-TRAP LOCK"
-
-    # 2. Dragon Streak (Lagatar 4 same results -> trend follow karein, 6 ke baad reversal)
     elif len(set(last4)) == 1:
         if len(h) >= 6 and len(set(h[-6:])) == 1:
             pred_size = opposite(last1)
@@ -88,28 +70,18 @@ def smart_prediction(history, num_history, consec_losses):
         else:
             pred_size = last1
             strategy = "DRAGON FOLLOW"
-
-    # 3. 2-2 Pair Pattern (e.g. BIG, BIG, SMALL, SMALL -> next BIG)
     elif last4[0] == last4[1] and last4[2] == last4[3] and last4[0] != last4[2]:
         pred_size = opposite(last1)
         strategy = "2-2 PAIR SHIFT"
-
-    # 4. 1-1 Zig-Zag Pattern (e.g. BIG, SMALL, BIG, SMALL -> next BIG)
     elif last4[0] != last4[1] and last4[1] != last4[2] and last4[2] != last4[3]:
         pred_size = opposite(last1)
         strategy = "ZIG-ZAG FLOW"
-
-    # 5. 2-1-2 Sandwich Pattern (e.g. BIG, SMALL, BIG -> next SMALL)
     elif last3[0] == last3[2] and last3[0] != last3[1]:
         pred_size = last3[1]
         strategy = "MIRROR PATTERN"
-
-    # 6. 3-Streak Start (e.g. BIG, BIG, BIG -> follow 4th)
     elif last3[0] == last3[1] == last3[2]:
         pred_size = last1
         strategy = "STREAK RIDE"
-
-    # 7. 8-Round Balance Check (Jo side kam aayi hai uska mean reversion)
     else:
         big_count = h.count("BIG")
         small_count = h.count("SMALL")
@@ -123,13 +95,8 @@ def smart_prediction(history, num_history, consec_losses):
             pred_size = opposite(last1)
             strategy = "SMART ALTERNATE"
 
-    # Smart Number Selection (jo numbers pichhle 4 rounds mein nahi aaye unhe priority dein)
     recent_nums = set(num_history[-4:])
-    if pred_size == "BIG":
-        pool = [5, 6, 7, 8, 9]
-    else:
-        pool = [0, 1, 2, 3, 4]
-
+    pool = [5, 6, 7, 8, 9] if pred_size == "BIG" else [0, 1, 2, 3, 4]
     fresh_nums = [n for n in pool if n not in recent_nums]
     if len(fresh_nums) >= 2:
         pred_nums = sorted(random.sample(fresh_nums, 2))
@@ -143,45 +110,122 @@ def calculate_ratio():
         return 0.0
     return round((stats["wins"] / stats["total_rounds"]) * 100, 2)
 
-def get_keyboard_json():
-    next_mult = 3 ** stats["current_level"]
-    w_ok = "✅" if stickers["win"] else "⚠️"
-    j_ok = "✅" if stickers["jackpot"] else "⚠️"
-    l_ok = "✅" if stickers["loss"] else "⚠️"
+# ================= DYNAMIC WEBP STICKER GENERATOR =================
+def get_font(size):
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
 
-    if stats["active"]:
-        keyboard = [
-            [
-                {"text": f"✅ WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_win"},
-                {"text": f"❌ LOSS ({next_mult}X)", "callback_data": "mark_loss"}
-            ],
-            [
-                {"text": f"🎰 JACKPOT WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_jackpot"}
-            ],
-            [
-                {"text": "🛑 STOP PREDICTION", "callback_data": "stop_session"}
-            ],
-            [
-                {"text": f"{w_ok} Set Win", "callback_data": "set_win"},
-                {"text": f"{j_ok} Set Jackpot", "callback_data": "set_jackpot"},
-                {"text": f"{l_ok} Set Loss", "callback_data": "set_loss"}
-            ]
-        ]
-    else:
-        keyboard = [
-            [
-                {"text": "▶️ START PREDICTION", "callback_data": "start_session"}
-            ],
-            [
-                {"text": f"{w_ok} Set Win Sticker", "callback_data": "set_win"},
-                {"text": f"{j_ok} Set Jackpot Sticker", "callback_data": "set_jackpot"}
-            ],
-            [
-                {"text": f"{l_ok} Set Loss Sticker", "callback_data": "set_loss"}
-            ]
-        ]
-    return json.dumps({"inline_keyboard": keyboard})
+def draw_centered_text(draw, text, y, font, fill, stroke_fill=None, stroke_width=0):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    x = (512 - w) // 2
+    draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
 
+def image_to_webp_bytes(img):
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=95)
+    buf.seek(0)
+    return buf
+
+def make_prediction_sticker(period_short, level, pred_size):
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    border_col = (255, 195, 0, 255) if pred_size == "BIG" else (0, 225, 255, 255)
+    text_col = (255, 220, 60, 255) if pred_size == "BIG" else (80, 240, 255, 255)
+
+    # Outer glow card
+    draw.rounded_rectangle([24, 24, 488, 488], radius=75, fill=(18, 20, 32, 248), outline=border_col, width=14)
+    draw.rounded_rectangle([42, 42, 470, 470], radius=62, outline=(255, 60, 120, 180), width=4)
+
+    # Top pill: #Period • LVL
+    draw.rounded_rectangle([110, 82, 402, 134], radius=26, fill=(38, 42, 66, 255), outline=border_col, width=3)
+    draw_centered_text(draw, f"#{period_short}  •  LVL {level}", 93, get_font(26), (255, 255, 255, 255))
+
+    # Main BIG / SMALL text
+    main_font = get_font(112 if pred_size == "BIG" else 88)
+    y_pos = 185 if pred_size == "BIG" else 200
+    draw_centered_text(draw, pred_size, y_pos, main_font, text_col, stroke_fill=(255, 90, 0, 255), stroke_width=4)
+
+    # Bottom brand pill
+    draw.rounded_rectangle([96, 365, 416, 418], radius=26, fill=(28, 32, 52, 255), outline=(0, 225, 255, 255), width=3)
+    draw_centered_text(draw, "GOLDEN GROUP™ AI", 377, get_font(24), (255, 255, 255, 255))
+
+    return image_to_webp_bytes(img)
+
+def make_numbers_sticker(period_short, level, nums, pred_size):
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rounded_rectangle([24, 24, 488, 488], radius=75, fill=(14, 18, 30, 248), outline=(0, 230, 255, 255), width=14)
+
+    # Top pill
+    draw.rounded_rectangle([92, 68, 420, 118], radius=25, fill=(45, 25, 70, 255), outline=(220, 80, 255, 255), width=3)
+    draw_centered_text(draw, f"{nums[0]} • {nums[1]}  |  #{period_short} LVL {level}", 80, get_font(22), (255, 255, 255, 255))
+
+    # Left Gold Ball
+    draw.ellipse([52, 155, 246, 349], fill=(245, 165, 0, 255), outline=(255, 245, 180, 255), width=10)
+    draw.ellipse([68, 171, 230, 333], outline=(255, 255, 255, 200), width=4)
+    draw.text((116, 192), str(nums[0]), font=get_font(105), fill=(255, 255, 255, 255), stroke_width=4, stroke_fill=(120, 60, 0, 255))
+
+    # Right Emerald Green Ball
+    draw.ellipse([266, 155, 460, 349], fill=(0, 195, 95, 255), outline=(180, 255, 210, 255), width=10)
+    draw.ellipse([282, 171, 444, 333], outline=(255, 255, 255, 200), width=4)
+    draw.text((330, 192), str(nums[1]), font=get_font(105), fill=(255, 255, 255, 255), stroke_width=4, stroke_fill=(0, 80, 35, 255))
+
+    draw_centered_text(draw, f"GOLDEN JACKPOT NUMBERS ({pred_size})", 392, get_font(20), (190, 245, 255, 255))
+    return image_to_webp_bytes(img)
+
+def make_win_count_sticker(win_num, target_wins, period_short):
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rounded_rectangle([24, 24, 488, 488], radius=75, fill=(14, 32, 22, 250), outline=(0, 255, 130, 255), width=14)
+    draw.rounded_rectangle([44, 44, 468, 468], radius=60, outline=(255, 215, 0, 200), width=4)
+
+    draw_centered_text(draw, f"PERIOD #{period_short}", 80, get_font(26), (180, 255, 210, 255))
+    draw_centered_text(draw, f"WIN {win_num}", 155, get_font(112), (0, 255, 135, 255), stroke_fill=(255, 215, 0, 255), stroke_width=4)
+
+    draw.rounded_rectangle([120, 310, 392, 368], radius=28, fill=(255, 200, 0, 255))
+    draw_centered_text(draw, f"TARGET {win_num}/{target_wins} PASS", 324, get_font(26), (20, 25, 15, 255))
+    draw_centered_text(draw, "GOLDEN GROUP™ VIP", 405, get_font(23), (255, 255, 255, 255))
+
+    return image_to_webp_bytes(img)
+
+def make_number_jackpot_sticker(hit_num, period_short):
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rounded_rectangle([24, 24, 488, 488], radius=75, fill=(32, 16, 42, 250), outline=(255, 200, 0, 255), width=14)
+    draw_centered_text(draw, "JACKPOT NUMBER HIT!", 68, get_font(28), (255, 225, 70, 255))
+
+    # Big Golden Center Ball (0 to 9)
+    draw.ellipse([141, 130, 371, 360], fill=(255, 175, 0, 255), outline=(255, 250, 200, 255), width=12)
+    draw.ellipse([159, 148, 353, 342], outline=(255, 255, 255, 220), width=4)
+    draw_centered_text(draw, str(hit_num), 172, get_font(135), (255, 255, 255, 255), stroke_fill=(130, 50, 0, 255), stroke_width=5)
+
+    draw_centered_text(draw, f"NUMBER {hit_num} WIN  •  #{period_short}", 398, get_font(25), (255, 255, 255, 255))
+    return image_to_webp_bytes(img)
+
+def make_loss_sticker(next_mult, period_short):
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rounded_rectangle([24, 24, 488, 488], radius=75, fill=(38, 14, 20, 250), outline=(255, 55, 75, 255), width=14)
+    draw_centered_text(draw, f"PERIOD #{period_short} LOSS", 85, get_font(28), (255, 180, 185, 255))
+    draw_centered_text(draw, f"NEXT {next_mult}X", 175, get_font(102), (255, 65, 80, 255), stroke_fill=(255, 220, 0, 255), stroke_width=3)
+    draw_centered_text(draw, "FOLLOW FUND MANAGEMENT", 335, get_font(23), (255, 230, 120, 255))
+    draw_centered_text(draw, "GOLDEN GROUP™ AI", 405, get_font(22), (255, 255, 255, 255))
+
+    return image_to_webp_bytes(img)
+
+# ================= TELEGRAM SEND HELPERS =================
 def tg_send_msg(chat_id, text, reply_markup=None):
     payload = {
         "chat_id": chat_id,
@@ -196,19 +240,42 @@ def tg_send_msg(chat_id, text, reply_markup=None):
     except Exception as e:
         print(f"Send Msg Error: {e}")
 
-def tg_send_sticker(chat_id, sticker_id):
-    if not sticker_id:
-        return
+def tg_send_webp_sticker(chat_id, webp_buf):
     try:
-        res = requests.post(
+        requests.post(
             f"{TG_API}/sendSticker",
-            json={"chat_id": chat_id, "sticker": sticker_id},
-            timeout=10
-        ).json()
-        if not res.get("ok"):
-            tg_send_msg(ADMIN_ID, f"⚠️ Sticker Error: `{res.get('description')}`")
+            data={"chat_id": chat_id},
+            files={"sticker": ("sticker.webp", webp_buf, "image/webp")},
+            timeout=15
+        )
     except Exception as e:
-        print(f"Send Sticker Error: {e}")
+        print(f"Send WebP Sticker Error: {e}")
+
+def get_keyboard_json():
+    next_mult = 3 ** stats["current_level"]
+    n1, n2 = stats["last_nums"][0], stats["last_nums"][1]
+
+    if stats["active"]:
+        keyboard = [
+            [
+                {"text": f"✅ WIN ({stats['wins'] + 1}/{TARGET_WINS})", "callback_data": "mark_win"},
+                {"text": f"❌ LOSS ({next_mult}X)", "callback_data": "mark_loss"}
+            ],
+            [
+                {"text": f"🎰 NUM {n1} WIN", "callback_data": f"num_win_{n1}"},
+                {"text": f"🎰 NUM {n2} WIN", "callback_data": f"num_win_{n2}"}
+            ],
+            [
+                {"text": "🛑 STOP PREDICTION", "callback_data": "stop_session"}
+            ]
+        ]
+    else:
+        keyboard = [
+            [
+                {"text": "▶️ START PREDICTION", "callback_data": "start_session"}
+            ]
+        ]
+    return {"inline_keyboard": keyboard}
 
 def edit_admin_panel(chat_id, message_id, text):
     try:
@@ -219,7 +286,7 @@ def edit_admin_panel(chat_id, message_id, text):
                 "message_id": message_id,
                 "text": text,
                 "parse_mode": "Markdown",
-                "reply_markup": json.loads(get_keyboard_json())
+                "reply_markup": get_keyboard_json()
             },
             timeout=10
         )
@@ -230,6 +297,7 @@ def post_next_prediction():
     now = get_ist_now()
     current_period = get_raxi_period_number(now)
     stats["current_period"] = current_period
+    period_short = current_period[-4:]
 
     active_size, active_nums, strategy = smart_prediction(
         stats["history"],
@@ -240,31 +308,33 @@ def post_next_prediction():
     stats["last_nums"] = active_nums
     stats["strategy_used"] = strategy
 
-    multiplier = 3 ** (stats["current_level"] - 1)
-    size_emoji = "🟢" if active_size == "BIG" else "🔴"
-    nums_str = f"{active_nums[0]}, {active_nums[1]}"
+    level_num = stats["current_level"]
+    multiplier = 3 ** (level_num - 1)
+    nums_str = f"[ {active_nums[0]} , {active_nums[1]} ]"
 
+    # 1. Text Prediction Message
     pred_msg = (
-        f"🔥 **RAXI WIN - WINGO 1 MIN** 🔥\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 **Period:** `{current_period}`\n"
-        f"🎯 **Prediction:** **{active_size}** {size_emoji}\n"
-        f"🔢 **Numbers:** **{nums_str}**\n"
-        f"💰 **Level:** `{multiplier}x`\n"
-        f"🏆 **Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🔗 [Play on Raxi Win]({REGISTER_LINK})"
+        f"⚡ **GOLDEN GROUP™ AI QUANTUM PRO • WINGO 1 MINUTE**\n\n"
+        f"🆔 **Period:** `{current_period}` (`#{period_short}`)\n"
+        f"⏱ **Prediction:** **{active_size}**\n"
+        f"🎯 **Jackpot Numbers:** **{nums_str}**\n"
+        f"📊 **Active Level:** `LEVEL {level_num}` (`{multiplier}x`)\n"
+        f"🏆 **Session Wins:** `{stats['wins']}/{TARGET_WINS}`\n"
+        f"🛡 **Always maintain 7 level fund**\n"
+        f"🔗 [Register on Raxi Win]({REGISTER_LINK})"
     )
     tg_send_msg(CHANNEL_ID, pred_msg)
 
-def handle_action(action, chat_id, message_id):
-    period_short = stats["current_period"][-4:] if stats["current_period"] else "----"
+    # 2. Custom BIG/SMALL Badge Sticker
+    st1 = make_prediction_sticker(period_short, level_num, active_size)
+    tg_send_webp_sticker(CHANNEL_ID, st1)
 
-    if action in ["set_win", "set_jackpot", "set_loss"]:
-        key = action.replace("set_", "")
-        stickers["waiting_for"] = key
-        tg_send_msg(ADMIN_ID, f"👇 Ab apna **{key.upper()} STICKER** is chat mein bhejein (send karein):")
-        return
+    # 3. Custom Dual Numbers Sticker
+    st2 = make_numbers_sticker(period_short, level_num, active_nums, active_size)
+    tg_send_webp_sticker(CHANNEL_ID, st2)
+
+def handle_action(action, chat_id, message_id):
+    period_short = stats["current_period"][-4:] if stats["current_period"] else "0000"
 
     if action == "start_session":
         stats["active"] = True
@@ -276,7 +346,7 @@ def handle_action(action, chat_id, message_id):
 
         tg_send_msg(
             CHANNEL_ID,
-            f"🔥 **RAXI WIN - WINGO 1 MIN STARTED!** 🔥\n"
+            f"🔥 **GOLDEN GROUP™ — WINGO 1 MIN STARTED!** 🔥\n"
             f"🎯 **Session Target:** `0/{TARGET_WINS} Wins`\n"
             f"🔗 **Register:** [Click Here to Join]({REGISTER_LINK})"
         )
@@ -286,7 +356,7 @@ def handle_action(action, chat_id, message_id):
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING (0/{TARGET_WINS})**\n"
-            f"🆔 Active Period: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🆔 Active: `#{period_short}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
             f"🧠 AI Logic: `{stats['strategy_used']}`"
         )
 
@@ -323,11 +393,14 @@ def handle_action(action, chat_id, message_id):
         stats["num_history"].append(random.choice(stats["last_nums"]))
         ratio = calculate_ratio()
 
-        tg_send_sticker(CHANNEL_ID, stickers["win"])
+        # WIN 1, WIN 2 ... WIN 10 Custom Sticker
+        win_st = make_win_count_sticker(stats["wins"], TARGET_WINS, period_short)
+        tg_send_webp_sticker(CHANNEL_ID, win_st)
+
         tg_send_msg(
             CHANNEL_ID,
             f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
-            f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** PASS\n"
+            f"🆔 Period: `#{period_short}` | Result: **{stats['last_size']}** PASS\n"
             f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
 
@@ -337,33 +410,39 @@ def handle_action(action, chat_id, message_id):
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-            f"✅ Last: **WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
-            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"✅ Last: **WIN {stats['wins']}** (`#{period_short}`)\n"
+            f"🆔 Next: `#{stats['current_period'][-4:]}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
             f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
-    elif action == "mark_jackpot":
+    elif action.startswith("num_win_"):
         if not stats["active"]:
             edit_admin_panel(chat_id, message_id, "🔴 Prediction band hai. Pehle START dabayein:")
             return
 
+        hit_num = int(action.split("_")[-1])
         prev_wins = stats["wins"]
         stats["total_rounds"] += 1
         stats["wins"] += 1
         stats["current_level"] = 1
         stats["consecutive_losses"] = 0
         stats["history"].append(stats["last_size"])
-        stats["num_history"].append(stats["last_nums"][0])
+        stats["num_history"].append(hit_num)
         ratio = calculate_ratio()
-        nums_str = f"{stats['last_nums'][0]}, {stats['last_nums'][1]}"
 
-        tg_send_sticker(CHANNEL_ID, stickers["win"])
-        tg_send_sticker(CHANNEL_ID, stickers["jackpot"])
+        # 1. WIN 1..10 Sticker
+        win_st = make_win_count_sticker(stats["wins"], TARGET_WINS, period_short)
+        tg_send_webp_sticker(CHANNEL_ID, win_st)
+
+        # 2. Exact Winning Number (0 to 9) Jackpot Sticker
+        num_st = make_number_jackpot_sticker(hit_num, period_short)
+        tg_send_webp_sticker(CHANNEL_ID, num_st)
+
         tg_send_msg(
             CHANNEL_ID,
-            f"🎰 **JACKPOT NUMBER WIN!** 🎰\n"
+            f"🎰 **JACKPOT NUMBER {hit_num} WIN!** 🎰\n"
             f"🏆 **WINNING TARGET: {prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}** ✅\n"
-            f"🆔 Period: `{period_short}` | Result: **{stats['last_size']}** & Number (**{nums_str}**) PASS!\n"
+            f"🆔 Period: `#{period_short}` | **{stats['last_size']}** & Number **{hit_num}** PASS!\n"
             f"📊 **Achieving Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
 
@@ -373,8 +452,8 @@ def handle_action(action, chat_id, message_id):
         edit_admin_panel(
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
-            f"🎰 Last: **JACKPOT WIN** (`{prev_wins}/{TARGET_WINS} ➔ {stats['wins']}/{TARGET_WINS}`)\n"
-            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🎰 Last: **NUM {hit_num} JACKPOT** (`WIN {stats['wins']}`)\n"
+            f"🆔 Next: `#{stats['current_period'][-4:]}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
             f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
@@ -394,10 +473,13 @@ def handle_action(action, chat_id, message_id):
         multiplier = 3 ** (stats["current_level"] - 1)
         ratio = calculate_ratio()
 
-        tg_send_sticker(CHANNEL_ID, stickers["loss"])
+        # Dynamic NEXT 3X / 9X Loss Sticker
+        loss_st = make_loss_sticker(multiplier, period_short)
+        tg_send_webp_sticker(CHANNEL_ID, loss_st)
+
         tg_send_msg(
             CHANNEL_ID,
-            f"❌ **LOSS** | Period: `{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
+            f"❌ **LOSS** | Period: `#{period_short}` | Wins: `{stats['wins']}/{TARGET_WINS}`\n"
             f"⚠️ **Agle Round mein {multiplier}x Fund lagayein!**\n"
             f"📊 **Current Ratio:** `{ratio}%` ({stats['wins']}W / {stats['losses']}L)"
         )
@@ -409,40 +491,26 @@ def handle_action(action, chat_id, message_id):
             chat_id, message_id,
             f"🟢 **PREDICTION RUNNING ({stats['wins']}/{TARGET_WINS})**\n"
             f"❌ Last: **LOSS** ➔ Next Level: **{multiplier}x**\n"
-            f"🆔 Next: `{stats['current_period']}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
+            f"🆔 Next: `#{stats['current_period'][-4:]}` (`{stats['last_size']}` | `{stats['last_nums'][0]}, {stats['last_nums'][1]}`)\n"
             f"🧠 Logic: `{stats['strategy_used']}` | Ratio: `{ratio}%`"
         )
 
 @app.route('/')
 def home():
-    return "Raxi Win Multi-Pattern Webhook Bot is Active!"
+    return "Golden Group Dynamic Sticker Bot is Active!"
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
     upd = request.get_json(silent=True) or {}
 
     if "message" in upd and upd["message"].get("from", {}).get("id") == ADMIN_ID:
-        msg = upd["message"]
-        txt = msg.get("text", "")
-
-        if "sticker" in msg:
-            file_id = msg["sticker"]["file_id"]
-            target = stickers["waiting_for"] or "win"
-            stickers[target] = file_id
-            stickers["waiting_for"] = None
-            tg_send_msg(
-                ADMIN_ID,
-                f"✅ **{target.upper()} STICKER SAVED!**\nAb channel mein 100% sticker jayega:",
-                reply_markup=get_keyboard_json()
-            )
-            return "OK", 200
-
+        txt = upd["message"].get("text", "")
         if txt.startswith("/start"):
             status_txt = f"🟢 RUNNING ({stats['wins']}/{TARGET_WINS})" if stats["active"] else "🔴 STOPPED"
             tg_send_msg(
                 ADMIN_ID,
-                f"🎛 **RAXI WIN AUTO-SMART PANEL ({status_txt})**\n"
-                f"8-Round Multi-Pattern & Anti-Trap AI active hai:",
+                f"🎛 **GOLDEN GROUP™ DYNAMIC STICKER PANEL ({status_txt})**\n"
+                f"Har trade ke saath live #Period + BIG/SMALL + Numbers stickers banenge:",
                 reply_markup=get_keyboard_json()
             )
 
@@ -470,8 +538,9 @@ def setup_webhook_and_ping():
         )
         tg_send_msg(
             ADMIN_ID,
-            f"🎛 **RAXI WIN AUTO-SMART ENGINE READY!**\n"
-            f"8-Round Multi-Pattern & Anti-Trap AI lag gaya hai. Stickers set karke **START PREDICTION** dabayein:",
+            f"🎛 **GOLDEN GROUP™ DYNAMIC STICKER BOT READY!**\n"
+            f"Har prediction ke saath live **#Period + BIG/SMALL + Dual Numbers**, **WIN 1–10**, aur **0–9 Number Win** stickers automatic banenge!\n"
+            f"Shuru karne ke liye **START PREDICTION** dabayein:",
             reply_markup=get_keyboard_json()
         )
     except Exception as e:
